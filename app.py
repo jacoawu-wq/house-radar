@@ -52,25 +52,28 @@ with st.sidebar:
     st.divider()
     force_demo_ai = st.checkbox("🔧 強制使用模擬 AI 結果 (Demo用)", value=False)
 
-# --- [新功能] 定義 Mobile01 房地產版塊白名單 ---
-# 只有網址包含這些代碼的，才算「純正」的房地產討論
-REAL_ESTATE_FORUM_IDS = [
-    "f=356", # 台北市房地產
-    "f=454", # 新北市房地產
-    "f=924", # 房地產綜合
-    "f=400", # 居家房事消費經驗
-    "f=469", # 重劃區
-    "f=335", # 居家修繕 (有時跟漏水有關)
+# --- [修正] 改用黑名單機制 ---
+# 我們只封鎖明顯不相關的版塊，其他全部放行，避免資料太少
+BLOCKED_FORUM_IDS = [
+    "f=214", # Toyota (汽車)
+    "f=260", # Ford (汽車)
+    "f=261", # Honda (汽車)
+    "f=565", # 空調家電 (你提到的家電版)
+    "f=168", # 生活家電
+    "f=738", # 清潔家電
+    "f=61",  # 手機
+    "f=37",  # 相機
+    "f=320", # 旅遊美食
 ]
 
-def is_valid_real_estate_link(link):
-    """檢查連結是否屬於房地產版塊"""
+def is_blocked_link(link):
+    """檢查連結是否屬於黑名單版塊"""
     if not link:
-        return False
-    # 只要連結中包含任何一個白名單 ID，就通過
-    for fid in REAL_ESTATE_FORUM_IDS:
+        return True # 空連結視為不安全
+    
+    for fid in BLOCKED_FORUM_IDS:
         if fid in link:
-            return True
+            return True # 抓到了，是黑名單
     return False
 
 # --- 3. 定義函數：透過 Google News 搜尋 Mobile01 ---
@@ -78,11 +81,13 @@ def search_mobile01_via_google(keyword):
     if not keyword:
         keyword = "台北 房產"
         
-    # 搜尋語法加上負面關鍵字，先把明顯的雜訊踢掉
-    negative_terms = "-食記 -手機 -相機 -汽車 -菜單 -開箱 -遊記"
+    # [修正] 簡化搜尋語法
+    # 移除負面關鍵字（如 -食記），避免 Google 找不到結果
+    # 只保留最核心的房地產關鍵字，確保命中率
     real_estate_terms = "預售 OR 建案 OR 房價 OR 坪數 OR 格局 OR 公寓 OR 大樓 OR 豪宅 OR 置產 OR 買房"
     
-    search_query = f"{keyword} ({real_estate_terms}) {negative_terms} site:mobile01.com"
+    # 組合搜尋語法
+    search_query = f"{keyword} ({real_estate_terms}) site:mobile01.com"
     
     encoded_query = urllib.parse.quote(search_query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
@@ -93,7 +98,7 @@ def search_mobile01_via_google(keyword):
         articles = []
         items = root.findall('.//item')
         
-        # 我們抓多一點 (30筆)，因為過濾後可能會變少
+        # 抓取前 30 筆來過濾
         for item in items[:30]:
             title_elem = item.find('title')
             link_elem = item.find('link')
@@ -104,10 +109,9 @@ def search_mobile01_via_google(keyword):
             pub_date = pub_elem.text if pub_elem is not None else ""
             title = title.replace("- Mobile01", "").strip()
             
-            # [核心過濾邏輯]
-            # 1. 檢查是否為房地產版塊 (f=356 等)
-            if not is_valid_real_estate_link(link):
-                continue # 如果不是白名單內的版塊，直接跳過，不收錄
+            # [核心過濾邏輯] 改為黑名單檢查
+            if is_blocked_link(link):
+                continue # 如果是汽車、家電版，跳過
             
             articles.append({
                 "標題": title,
@@ -116,7 +120,6 @@ def search_mobile01_via_google(keyword):
                 "發布時間": pub_date
             })
             
-            # 如果湊滿 10 筆就夠了，停止 (避免分析太久)
             if len(articles) >= 10:
                 break
             
@@ -213,10 +216,11 @@ with col_btn:
     st.write("") 
     st.write("")
     if st.button("🚀 搜尋真實資料", type="primary"):
-        with st.spinner(f'正在過濾 Mobile01 房地產版塊關於「{keyword}」的文章...'):
+        with st.spinner(f'正在 Google 尋找 Mobile01 上關於「{keyword}」的文章...'):
             st.session_state.data = search_mobile01_via_google(keyword)
             if not st.session_state.data:
-                st.warning(f"在「房地產專屬版塊」中找不到關於「{keyword}」的討論，請嘗試其他關鍵字。")
+                # 如果還是找不到，這次顯示更溫和的提示
+                st.warning(f"Google 搜尋結果較少，請嘗試縮短關鍵字（例如：將『大安區預售屋』改為『大安區』）。")
 
 if st.button("📂 載入測試資料 (Demo Mode)", help="如果搜尋壞掉可以用這個"):
     st.session_state.data = get_demo_data()
@@ -226,7 +230,7 @@ if st.session_state.data:
     df = pd.DataFrame(st.session_state.data)
     
     st.divider()
-    st.write(f"### 📋 搜尋結果: {len(df)} 筆 (已過濾非房地產版塊)")
+    st.write(f"### 📋 搜尋結果: {len(df)} 筆 (排除車版、家電版)")
     
     display_col1, display_col2 = st.columns([3, 1])
     
