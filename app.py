@@ -68,6 +68,58 @@ def analyze_with_gemini(df, use_fake=False):
         time.sleep(1) 
         st.toast("使用模擬 AI 結果...")
         
-        # 產生假情緒數據
-        demo_sentiments = ["焦慮", "負面", "正面", "觀望", "中立"]
-        demo_keywords = ["價格過高, CP值低", "漏水, 施工品質", "格局方正, 採光好", "升息,
+        # [修復] 改成直式排列，避免語法錯誤
+        demo_sentiments = [
+            "焦慮", 
+            "負面", 
+            "正面", 
+            "觀望", 
+            "中立"
+        ]
+        
+        demo_keywords = [
+            "價格過高, CP值低", 
+            "漏水, 施工品質", 
+            "格局方正, 採光好", 
+            "升息, 房市高點", 
+            "老屋翻修, 重劃區"
+        ]
+        
+        # 確保數據長度足夠
+        while len(demo_sentiments) < len(df):
+            demo_sentiments.extend(demo_sentiments)
+            demo_keywords.extend(demo_keywords)
+            
+        df['AI情緒'] = demo_sentiments[:len(df)]
+        df['關鍵重點'] = demo_keywords[:len(df)]
+        
+        return df, None 
+        
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    titles_text = "\n".join([f"{i+1}. {t}" for i, t in enumerate(df['標題'].tolist())])
+    
+    prompt = f"""
+    你是專業的房地產分析師。請分析以下標題：
+    {titles_text}
+    
+    請針對每一個標題，回傳 Python list of dictionaries 格式（不要 Markdown）：
+    [
+        {{"sentiment": "正面/負面/中立/焦慮", "keyword": "關鍵字1, 關鍵字2"}}
+    ]
+    確保回傳的 list 長度與標題數量一致。
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        clean_text = response.text.replace("```json", "").replace("```python", "").replace("```", "").strip()
+        import json
+        
+        try:
+            result_json = json.loads(clean_text)
+        except:
+            start = clean_text.find('[')
+            end = clean_text.rfind(']') + 1
+            result_json = json.loads(clean_text[start:end])
+
+        sentiments = [item.get('sentiment', '未知') for item in result_json]
+        keywords = [item.get('keyword', '無')
