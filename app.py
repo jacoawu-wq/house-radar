@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 import google.generativeai as genai
+import time
 
 # --- 1. 設定頁面 ---
 st.set_page_config(page_title="房市輿情雷達 AI 版", page_icon="🏠", layout="wide")
@@ -20,6 +21,10 @@ with st.sidebar:
         st.success("✅ API Key 已設定")
     else:
         st.warning("⚠️ 請輸入 API Key 才能使用 AI 分析")
+    
+    st.divider()
+    # 新增一個保險開關，如果 API 一直壞掉，打開這個可以救命
+    force_demo_ai = st.checkbox("🔧 強制使用模擬 AI 結果 (API 壞掉時用)", value=False)
 
 # --- 3. 定義函數：爬蟲與模擬數據 ---
 HEADERS = {
@@ -50,17 +55,27 @@ def scrape_mobile01_taipei():
 
 def get_demo_data():
     return [
-        {"標題": "大安區預售屋開價破百萬合理嗎？最近看的心很累", "連結": "https://www.mobile01.com", "來源": "Demo"},
-        {"標題": "請問 XX 建案的施工品質如何？聽說之前有漏水案例", "連結": "https://www.mobile01.com", "來源": "Demo"},
-        {"標題": "分享：終於簽約了！推薦大家去看這間，格局真的很棒", "連結": "https://www.mobile01.com", "來源": "Demo"},
-        {"標題": "現在進場是不是高點？想買房自住但怕被套牢", "連結": "https://www.mobile01.com", "來源": "Demo"},
-        {"標題": "信義區舊公寓 vs 新北重劃區新成屋 怎麼選？", "連結": "https://www.mobile01.com", "來源": "Demo"},
+        {"標題": "大安區預售屋開價破百萬合理嗎？最近看的心很累", "連結": "#", "來源": "Demo"},
+        {"標題": "請問 XX 建案的施工品質如何？聽說之前有漏水案例", "連結": "#", "來源": "Demo"},
+        {"標題": "分享：終於簽約了！推薦大家去看這間，格局真的很棒", "連結": "#", "來源": "Demo"},
+        {"標題": "現在進場是不是高點？想買房自住但怕被套牢", "連結": "#", "來源": "Demo"},
+        {"標題": "信義區舊公寓 vs 新北重劃區新成屋 怎麼選？", "連結": "#", "來源": "Demo"},
     ]
 
-# --- 4. 定義函數：AI 分析 ---
-def analyze_with_gemini(df):
-    if not api_key:
-        st.error("❌ 請先設定 API Key")
+# --- 4. 定義函數：AI 分析 (含防彈機制) ---
+def analyze_with_gemini(df, use_fake=False):
+    # 如果開啟強制模擬，或者沒有 API Key，就直接回傳假結果
+    if use_fake or not api_key:
+        time.sleep(1) # 假裝跑一下
+        st.toast("使用模擬 AI 結果...")
+        # 依據標題長度產生對應數量的假資料
+        df['AI情緒'] = ["焦慮", "負面", "正面", "觀望", "中立"][:len(df)]
+        df['關鍵重點'] = ["價格過高, CP值低", "漏水, 施工品質", "格局方正, 採光好", "升息, 房市高點", "老屋翻修, 重劃區"][:len(df)]
+        
+        # 補齊不足的部分
+        while len(df['AI情緒']) < len(df):
+             df.loc[len(df['AI情緒']):, 'AI情緒'] = "中立"
+             df.loc[len(df['關鍵重點']):, '關鍵重點'] = "一般討論"
         return df
 
     model = genai.GenerativeModel('gemini-1.5-flash')
@@ -92,17 +107,21 @@ def analyze_with_gemini(df):
         sentiments = [item.get('sentiment', '未知') for item in result_json]
         keywords = [item.get('keyword', '無') for item in result_json]
         
+        # 補齊長度
         while len(sentiments) < len(df):
             sentiments.append("未知")
             keywords.append("無")
             
         df['AI情緒'] = sentiments[:len(df)]
         df['關鍵重點'] = keywords[:len(df)]
-        return df
+        return df, None # 成功，錯誤訊息為 None
         
     except Exception as e:
-        st.error(f"AI 分析失敗: {e}")
-        return df
+        # 這裡是最重要的修改：失敗時不崩潰，而是回傳帶有錯誤訊息的 DataFrame
+        error_msg = str(e)
+        df['AI情緒'] = "連線失敗"
+        df['關鍵重點'] = "API Error"
+        return df, error_msg
 
 # --- 5. 主程式介面 ---
 st.title("🏠 房市輿情雷達 + AI 分析")
@@ -111,7 +130,7 @@ st.title("🏠 房市輿情雷達 + AI 分析")
 if 'data' not in st.session_state:
     st.session_state.data = []
 
-# 按鈕區 (Action Area)
+# 按鈕區
 col1, col2 = st.columns([1, 4])
 
 with col1:
@@ -126,16 +145,14 @@ with col2:
         st.session_state.data = get_demo_data()
         st.success("已載入模擬數據！")
 
-# --- 6. 顯示內容區 (Display Area) ---
-# 關鍵：這段程式碼必須在按鈕邏輯之後，且縮排要在最外層
+# --- 6. 顯示內容區 ---
 
 if st.session_state.data:
     df = pd.DataFrame(st.session_state.data)
     
-    st.divider() # 畫一條分隔線
+    st.divider()
     st.write(f"### 📋 監控列表 (共 {len(df)} 筆)")
     
-    # 這裡將畫面切成左右兩塊：左邊表格，右邊 AI 操作
     display_col1, display_col2 = st.columns([3, 1])
     
     with display_col1:
@@ -147,30 +164,44 @@ if st.session_state.data:
     
     with display_col2:
         st.info("💡 準備好後點擊下方按鈕")
+        
         if st.button("🤖 開始 AI 分析", type="primary"):
-            if not api_key:
-                st.error("請輸入 Key")
-            else:
-                with st.spinner("AI 正在閱讀中..."):
-                    df_analyzed = analyze_with_gemini(df)
-                    st.session_state.analyzed_data = df_analyzed
-                    st.rerun() # 強制刷新畫面顯示結果
+            with st.spinner("AI 正在閱讀中..."):
+                # 呼叫分析函數，根據是否勾選強制 demo
+                result, error = analyze_with_gemini(df, use_fake=force_demo_ai)
+                
+                st.session_state.analyzed_data = result
+                
+                # 如果有錯誤，存到 session state 讓 rerun 後顯示
+                if error:
+                    st.session_state.error_msg = error
+                else:
+                    st.session_state.error_msg = None
+                    
+                st.rerun()
 
-    # 顯示分析結果
+    # 顯示分析結果 (這段邏輯現在非常安全)
     if 'analyzed_data' in st.session_state:
         st.divider()
         st.subheader("📊 AI 洞察報告")
         
-        # 結果表
-        st.dataframe(
-            st.session_state.analyzed_data[['標題', 'AI情緒', '關鍵重點']],
-            use_container_width=True
-        )
-        
-        # 統計圖
-        if 'AI情緒' in st.session_state.analyzed_data.columns:
+        # 如果上次執行有錯誤，顯示在這裡
+        if st.session_state.get('error_msg'):
+            st.error(f"AI 連線發生狀況，已顯示預設值。錯誤原因: {st.session_state.error_msg}")
+            st.info("💡 提示：您可以勾選左側側邊欄的「強制使用模擬 AI 結果」來避開此問題。")
+
+        # 檢查欄位是否存在 (防止 KeyError)
+        result_df = st.session_state.analyzed_data
+        if 'AI情緒' in result_df.columns:
+            st.dataframe(
+                result_df[['標題', 'AI情緒', '關鍵重點']],
+                use_container_width=True
+            )
+            
             st.write("#### 情緒分佈")
-            st.bar_chart(st.session_state.analyzed_data['AI情緒'].value_counts())
+            st.bar_chart(result_df['AI情緒'].value_counts())
+        else:
+            st.error("資料格式異常，無法顯示分析結果。")
 
 else:
     st.info("👈 請點擊上方按鈕開始")
