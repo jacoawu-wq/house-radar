@@ -18,38 +18,32 @@ with st.sidebar:
     if not api_key:
         api_key = st.text_input("請輸入 Google Gemini API Key", type="password")
     
-    # 初始化 model_name 變數
     target_model_name = "尚未偵測"
 
     if api_key:
         genai.configure(api_key=api_key)
-        
-        # [核心救援機制] 自動偵測可用的模型
         try:
-            # 列出所有模型，尋找支援 generateContent 的模型
             valid_models = []
             for m in genai.list_models():
                 if 'generateContent' in m.supported_generation_methods:
                     valid_models.append(m.name)
             
-            # 優先尋找 flash 或 pro
             preferred_models = [m for m in valid_models if 'flash' in m]
             if not preferred_models:
                 preferred_models = [m for m in valid_models if 'pro' in m]
             
-            # 決定最終使用的模型名稱
             if preferred_models:
                 target_model_name = preferred_models[0]
             elif valid_models:
                 target_model_name = valid_models[0]
             else:
-                target_model_name = "gemini-1.5-flash" # 萬一都沒抓到，就盲猜一個最新的
+                target_model_name = "gemini-1.5-flash"
             
-            st.success(f"✅ 連線成功 (使用模型: {target_model_name})")
+            st.success(f"✅ 連線成功 ({target_model_name})")
             
         except Exception as e:
-            st.warning(f"⚠️ API Key 可能無效或無法列出模型: {e}")
-            target_model_name = "gemini-1.5-flash" # 出錯時的預設值
+            st.warning(f"⚠️ API Key 可能無效: {e}")
+            target_model_name = "gemini-1.5-flash"
 
     else:
         st.warning("⚠️ 未偵測到 Key (將使用模擬模式)")
@@ -62,7 +56,13 @@ def search_mobile01_via_google(keyword):
     if not keyword:
         keyword = "台北 房產"
         
-    search_query = f"{keyword} site:mobile01.com"
+    # [核心修正] 加上房地產專屬關鍵字濾網
+    # 這會強迫 Google 只找跟房地產有關的討論，排除美食、旅遊等雜訊
+    real_estate_terms = "預售 OR 建案 OR 房價 OR 坪數 OR 格局 OR 公寓 OR 大樓 OR 豪宅 OR 置產 OR 買房"
+    
+    # 組合後的搜尋語法類似： "大安區 (預售 OR 建案 OR ...)"
+    search_query = f"{keyword} ({real_estate_terms}) site:mobile01.com"
+    
     encoded_query = urllib.parse.quote(search_query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     
@@ -119,8 +119,6 @@ def analyze_with_gemini(df, use_fake=False):
         df['關鍵重點'] = demo_keywords[:len(df)]
         return df, None, True 
         
-    # [核心修正] 使用自動偵測到的模型名稱，不再寫死
-    # 這裡把 'models/' 前綴去掉，因為有些 SDK 版本不需要，有些需要，genai.GenerativeModel 比較聰明
     clean_model_name = target_model_name.replace("models/", "")
     model = genai.GenerativeModel(clean_model_name)
     
@@ -230,7 +228,7 @@ if st.session_state.data:
         if st.session_state.get('is_simulated'):
             st.warning("⚠️ 注意：目前未輸入 API Key，以下為「模擬數據」範例。")
         else:
-            st.success(f"✅ 以下為 Gemini 真實分析結果 (模型: {target_model_name})")
+            st.success(f"✅ 以下為 Gemini 真實分析結果 ({target_model_name})")
 
         if st.session_state.get('error_msg'):
             st.error(f"AI 連線異常: {st.session_state.error_msg}")
