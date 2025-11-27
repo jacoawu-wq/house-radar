@@ -185,4 +185,48 @@ if st.session_state.data:
     df = pd.DataFrame(st.session_state.data)
     
     st.divider()
-    st.write(f"###
+    st.write(f"### 📋 搜尋結果: {len(df)} 筆")
+    
+    display_col1, display_col2 = st.columns([3, 1])
+    
+    with display_col1:
+        st.dataframe(
+            df[['標題', '連結']], 
+            column_config={"連結": st.column_config.LinkColumn()},
+            use_container_width=True
+        )
+    
+    with display_col2:
+        st.info("💡 取得資料後，請點擊下方按鈕進行 AI 解讀")
+        
+        if st.button("🤖 AI 情緒分析"):
+            with st.spinner("AI 正在閱讀標題並分析情緒..."):
+                result, error = analyze_with_gemini(df, use_fake=force_demo_ai)
+                
+                st.session_state.analyzed_data = result
+                
+                if error:
+                    st.session_state.error_msg = error
+                else:
+                    st.session_state.error_msg = None
+                    
+                st.rerun()
+
+    if 'analyzed_data' in st.session_state:
+        st.divider()
+        st.subheader("📊 AI 洞察報告")
+        
+        if st.session_state.get('error_msg'):
+            st.error(f"AI 連線異常: {st.session_state.error_msg}")
+
+        result_df = st.session_state.analyzed_data
+        if 'AI情緒' in result_df.columns:
+            st.dataframe(
+                result_df[['標題', 'AI情緒', '關鍵重點']],
+                use_container_width=True
+            )
+            
+            st.write("#### 情緒分佈")
+            st.bar_chart(result_df['AI情緒'].value_counts())
+        else:
+            st.error("資料格式異常")
