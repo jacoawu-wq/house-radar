@@ -5,7 +5,7 @@ import google.generativeai as genai
 import time
 import json
 import urllib.parse
-import xml.etree.ElementTree as ET # 使用 Python 內建的 XML 解析器
+import xml.etree.ElementTree as ET # 使用 Python 內建 XML 解析器 (最穩)
 
 # --- 1. 設定頁面 ---
 st.set_page_config(page_title="房市輿情雷達 AI 版", page_icon="🏠", layout="wide")
@@ -113,7 +113,8 @@ def analyze_with_gemini(df, use_fake=False):
         
         return df, None, True 
         
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # [模型名稱修正] 改用最穩定的 gemini-pro，避免 404 錯誤
+    model = genai.GenerativeModel('gemini-pro')
     titles_text = "\n".join([f"{i+1}. {t}" for i, t in enumerate(df['標題'].tolist())])
     
     prompt = f"""
