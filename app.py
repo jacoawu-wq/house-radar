@@ -5,7 +5,8 @@ import pandas as pd
 import google.generativeai as genai
 import time
 import json
-import urllib.parse 
+import urllib.parse
+import re  # 引入正規表示法模組
 
 # --- 1. 設定頁面 ---
 st.set_page_config(page_title="房市輿情雷達 AI 版", page_icon="🏠", layout="wide")
@@ -13,10 +14,8 @@ st.set_page_config(page_title="房市輿情雷達 AI 版", page_icon="🏠", lay
 # --- 2. 側邊欄：設定 API Key ---
 with st.sidebar:
     st.header("⚙️ 設定")
-    # 嘗試抓取 secrets，沒有就抓 None
     api_key = st.secrets.get("GEMINI_API_KEY", None)
     
-    # 如果 secrets 沒抓到，允許使用者手動輸入
     if not api_key:
         api_key = st.text_input("請輸入 Google Gemini API Key", type="password")
     
@@ -41,13 +40,20 @@ def search_mobile01_via_google(keyword):
     
     try:
         response = requests.get(rss_url, timeout=10)
+        
+        # 使用 html.parser 解析結構
         soup = BeautifulSoup(response.text, 'html.parser') 
         items = soup.find_all('item')
         
         articles = []
         for item in items[:10]:
             title = item.title.text if item.title else "無標題"
-            link = item.link.text if item.link else "#"
+            
+            # [關鍵修正] 使用 Regex 直接從字串中抓取 <link> 內容
+            # 避開 html.parser 認為 <link> 是空標籤的問題
+            link_match = re.search(r'<link>(.*?)</link>', str(item))
+            link = link_match.group(1) if link_match else "#"
+            
             pub_date = item.pubDate.text if item.pubDate else ""
             title = title.replace("- Mobile01", "").strip()
             
@@ -75,13 +81,11 @@ def get_demo_data():
 
 # --- 4. 定義函數：AI 分析 ---
 def analyze_with_gemini(df, use_fake=False):
-    # 判斷是否要用假資料：如果強制勾選，或是沒有 API Key
     is_simulated = use_fake or (not api_key)
 
     if is_simulated:
         time.sleep(1) 
         
-        # 這裡會隨機分配情緒，讓你以為 AI 在工作
         demo_sentiments = []
         demo_sentiments.append("焦慮")
         demo_sentiments.append("負面")
@@ -103,10 +107,8 @@ def analyze_with_gemini(df, use_fake=False):
         df['AI情緒'] = demo_sentiments[:len(df)]
         df['關鍵重點'] = demo_keywords[:len(df)]
         
-        # 回傳是否為模擬數據的標記
         return df, None, True 
         
-    # --- 真實 AI 模式 ---
     model = genai.GenerativeModel('gemini-1.5-flash')
     titles_text = "\n".join([f"{i+1}. {t}" for i, t in enumerate(df['標題'].tolist())])
     
@@ -146,7 +148,7 @@ def analyze_with_gemini(df, use_fake=False):
             
         df['AI情緒'] = sentiments[:len(df)]
         df['關鍵重點'] = keywords[:len(df)]
-        return df, None, False # False 代表這是真 AI
+        return df, None, False 
         
     except Exception as e:
         error_msg = str(e)
@@ -195,7 +197,7 @@ if st.session_state.data:
         st.dataframe(
             df[['標題', '連結']], 
             column_config={
-                "連結": st.column_config.LinkColumn("文章連結", display_text="點擊前往")
+                "連結": st.column_config.LinkColumn("文章連結") 
             },
             use_container_width=True
         )
@@ -205,11 +207,10 @@ if st.session_state.data:
         
         if st.button("🤖 AI 情緒分析"):
             with st.spinner("AI 正在閱讀標題並分析情緒..."):
-                # 這裡會接收三個回傳值：結果, 錯誤, 是否模擬
                 result, error, is_sim = analyze_with_gemini(df, use_fake=force_demo_ai)
                 
                 st.session_state.analyzed_data = result
-                st.session_state.is_simulated = is_sim # 記錄這次是不是模擬的
+                st.session_state.is_simulated = is_sim 
                 
                 if error:
                     st.session_state.error_msg = error
@@ -222,9 +223,8 @@ if st.session_state.data:
         st.divider()
         st.subheader("📊 AI 洞察報告")
         
-        # 顯示警語：如果是模擬數據，顯示黃色警告
         if st.session_state.get('is_simulated'):
-            st.warning("⚠️ 注意：目前未輸入 API Key，以下為「模擬數據」範例，非真實 AI 分析結果。")
+            st.warning("⚠️ 注意：目前未輸入 API Key，以下為「模擬數據」範例。")
         else:
             st.success("✅ 以下為 Google Gemini 真實分析結果")
 
@@ -234,12 +234,12 @@ if st.session_state.data:
         result_df = st.session_state.analyzed_data
         
         if 'AI情緒' in result_df.columns:
-            # 這裡把連結欄位設為第一個，確保你看得見
+            # [修正] 直接顯示最原始的連結欄位，不做特殊文字遮罩，確保網址看得見
             st.dataframe(
                 result_df[['連結', '標題', 'AI情緒', '關鍵重點']], 
                 column_config={
-                    "連結": st.column_config.LinkColumn("文章連結", display_text="🔗 前往"),
-                    "AI情緒": st.column_config.TextColumn("情緒傾向"),
+                    "連結": st.column_config.LinkColumn("文章連結"), # 移除 display_text 參數，顯示完整網址
+                    "AI情緒": st.column_config.TextColumn("情緒"),
                 },
                 use_container_width=True
             )
