@@ -128,4 +128,16 @@ if 'data' not in st.session_state:
     st.session_state.data = []
 
 # 按鈕區
-col_
+col1, col2 = st.columns([1, 4])  # 我把變數名稱改簡單一點，比較不會錯
+
+with col1:
+    if st.button("🔄 抓取 Mobile01"): # 按鈕名字也改短一點
+        with st.spinner('連線中...'):
+            st.session_state.data = scrape_mobile01_taipei()
+            if not st.session_state.data:
+                st.warning("⚠️ 抓不到資料，請改用右邊的測試按鈕")
+
+with col2:
+    if st.button("📂 載入測試資料 (Demo Mode)"):
+        st.session_state.data = get_demo_data()
+        st.success("已載入模擬數據！")
