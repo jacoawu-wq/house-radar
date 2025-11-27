@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import google.generativeai as genai
 import time
+import json
 
 # --- 1. 設定頁面 ---
 st.set_page_config(page_title="房市輿情雷達 AI 版", page_icon="🏠", layout="wide")
@@ -61,31 +62,29 @@ def get_demo_data():
         {"標題": "信義區舊公寓 vs 新北重劃區新成屋 怎麼選？", "連結": "#", "來源": "Demo"},
     ]
 
-# --- 4. 定義函數：AI 分析 (已修復錯誤) ---
+# --- 4. 定義函數：AI 分析 ---
 def analyze_with_gemini(df, use_fake=False):
-    # 如果開啟強制模擬，或者沒有 API Key，就直接回傳假結果
+    # 模擬模式或無 Key 模式
     if use_fake or not api_key:
         time.sleep(1) 
         st.toast("使用模擬 AI 結果...")
         
-        # [修復] 改成直式排列，避免語法錯誤
-        demo_sentiments = [
-            "焦慮", 
-            "負面", 
-            "正面", 
-            "觀望", 
-            "中立"
-        ]
+        # 這裡改用最簡單的寫法
+        demo_sentiments = []
+        demo_sentiments.append("焦慮")
+        demo_sentiments.append("負面")
+        demo_sentiments.append("正面")
+        demo_sentiments.append("觀望")
+        demo_sentiments.append("中立")
         
-        demo_keywords = [
-            "價格過高, CP值低", 
-            "漏水, 施工品質", 
-            "格局方正, 採光好", 
-            "升息, 房市高點", 
-            "老屋翻修, 重劃區"
-        ]
+        demo_keywords = []
+        demo_keywords.append("價格過高, CP值低")
+        demo_keywords.append("漏水, 施工品質")
+        demo_keywords.append("格局方正, 採光好")
+        demo_keywords.append("升息, 房市高點")
+        demo_keywords.append("老屋翻修, 重劃區")
         
-        # 確保數據長度足夠
+        # 補齊長度
         while len(demo_sentiments) < len(df):
             demo_sentiments.extend(demo_sentiments)
             demo_keywords.extend(demo_keywords)
@@ -95,6 +94,7 @@ def analyze_with_gemini(df, use_fake=False):
         
         return df, None 
         
+    # 真實 AI 模式
     model = genai.GenerativeModel('gemini-1.5-flash')
     titles_text = "\n".join([f"{i+1}. {t}" for i, t in enumerate(df['標題'].tolist())])
     
@@ -112,7 +112,6 @@ def analyze_with_gemini(df, use_fake=False):
     try:
         response = model.generate_content(prompt)
         clean_text = response.text.replace("```json", "").replace("```python", "").replace("```", "").strip()
-        import json
         
         try:
             result_json = json.loads(clean_text)
@@ -121,5 +120,104 @@ def analyze_with_gemini(df, use_fake=False):
             end = clean_text.rfind(']') + 1
             result_json = json.loads(clean_text[start:end])
 
-        sentiments = [item.get('sentiment', '未知') for item in result_json]
-        keywords = [item.get('keyword', '無')
+        # 這裡就是原本報錯的地方，我把它改成分行寫，絕對安全
+        sentiments = []
+        for item in result_json:
+            sentiments.append(item.get('sentiment', '未知'))
+            
+        keywords = []
+        for item in result_json:
+            keywords.append(item.get('keyword', '無'))
+        
+        while len(sentiments) < len(df):
+            sentiments.append("未知")
+            keywords.append("無")
+            
+        df['AI情緒'] = sentiments[:len(df)]
+        df['關鍵重點'] = keywords[:len(df)]
+        return df, None 
+        
+    except Exception as e:
+        error_msg = str(e)
+        df['AI情緒'] = "連線失敗"
+        df['關鍵重點'] = "API Error"
+        return df, error_msg
+
+# --- 5. 主程式介面 ---
+st.title("🏠 房市輿情雷達 + AI 分析")
+
+# 初始化 session state
+if 'data' not in st.session_state:
+    st.session_state.data = []
+
+# 按鈕區
+col1, col2 = st.columns([1, 4])
+
+with col1:
+    if st.button("🔄 抓取 Mobile01"):
+        with st.spinner('連線中...'):
+            st.session_state.data = scrape_mobile01_taipei()
+            if not st.session_state.data:
+                st.warning("⚠️ 抓不到資料，請用測試按鈕")
+
+with col2:
+    if st.button("📂 載入測試資料 (Demo Mode)"):
+        st.session_state.data = get_demo_data()
+        st.success("已載入模擬數據！")
+
+# --- 6. 顯示內容區 ---
+
+if st.session_state.data:
+    df = pd.DataFrame(st.session_state.data)
+    
+    st.divider()
+    st.write(f"### 📋 監控列表 (共 {len(df)} 筆)")
+    
+    display_col1, display_col2 = st.columns([3, 1])
+    
+    with display_col1:
+        st.dataframe(
+            df[['標題', '連結']], 
+            column_config={"連結": st.column_config.LinkColumn()},
+            use_container_width=True
+        )
+    
+    with display_col2:
+        st.info("💡 準備好後點擊下方按鈕")
+        
+        if st.button("🤖 開始 AI 分析", type="primary"):
+            with st.spinner("AI 正在閱讀中..."):
+                result, error = analyze_with_gemini(df, use_fake=force_demo_ai)
+                
+                st.session_state.analyzed_data = result
+                
+                if error:
+                    st.session_state.error_msg = error
+                else:
+                    st.session_state.error_msg = None
+                    
+                st.rerun()
+
+    # 顯示分析結果
+    if 'analyzed_data' in st.session_state:
+        st.divider()
+        st.subheader("📊 AI 洞察報告")
+        
+        if st.session_state.get('error_msg'):
+            st.error(f"AI 連線發生狀況，已顯示預設值。錯誤原因: {st.session_state.error_msg}")
+            st.info("💡 提示：您可以勾選左側側邊欄的「強制使用模擬 AI 結果」來避開此問題。")
+
+        result_df = st.session_state.analyzed_data
+        if 'AI情緒' in result_df.columns:
+            st.dataframe(
+                result_df[['標題', 'AI情緒', '關鍵重點']],
+                use_container_width=True
+            )
+            
+            st.write("#### 情緒分佈")
+            st.bar_chart(result_df['AI情緒'].value_counts())
+        else:
+            st.error("資料格式異常，無法顯示分析結果。")
+
+else:
+    st.info("👈 請點擊上方按鈕開始")
