@@ -11,60 +11,66 @@ import re
 # --- 1. 設定頁面 ---
 st.set_page_config(page_title="房市輿情雷達 AI 版", page_icon="🏠", layout="wide")
 
-# --- 2. 側邊欄：設定 API Key (按鈕驗證版) ---
+# --- 2. 側邊欄：設定 API Key (含驗證按鈕 & 模型自動偵測) ---
 with st.sidebar:
     st.header("⚙️ 設定")
     
-    # 初始化 session state 中的 key
     if 'valid_api_key' not in st.session_state:
-        # 先試著從 secrets 抓，抓不到就是 None
         st.session_state.valid_api_key = st.secrets.get("GEMINI_API_KEY", None)
 
-    # 如果目前還沒有有效的 Key，就顯示輸入框和按鈕
+    # 輸入與驗證區
     if not st.session_state.valid_api_key:
         user_input_key = st.text_input("請輸入 Google Gemini API Key", type="password")
         
+        # [功能] 驗證按鈕
         if st.button("✅ 驗證並設定", type="primary"):
             if not user_input_key:
                 st.error("❌ 請輸入內容")
             else:
-                # 嘗試連線驗證
                 try:
                     genai.configure(api_key=user_input_key)
                     # 試著列出模型來確認 Key 是活的
-                    genai.list_models() 
-                    # 驗證成功，存入 session state
+                    list(genai.list_models()) 
                     st.session_state.valid_api_key = user_input_key
                     st.success("驗證成功！")
                     time.sleep(1)
-                    st.rerun() # 重新整理頁面以套用
+                    st.rerun()
                 except Exception as e:
                     st.error(f"❌ Key 無效或連線失敗: {e}")
     else:
-        # 如果已經有有效的 Key (不管是 secrets 給的還是剛輸入的)
-        st.success("✅ API Key 已設定 (真實 AI 模式)")
-        
-        # 提供一個清除按鈕 (如果是手動輸入的話)
+        st.success("✅ API Key 已設定")
         if st.secrets.get("GEMINI_API_KEY") is None:
             if st.button("🔄 清除/更換 Key"):
                 st.session_state.valid_api_key = None
                 st.rerun()
 
-    # 自動偵測模型名稱 (為了顯示給使用者看)
-    target_model_name = "gemini-1.5-flash" # 預設值
-    if st.session_state.valid_api_key:
-        genai.configure(api_key=st.session_state.valid_api_key)
-        # 簡單偵測一下
-        try:
-            for m in genai.list_models():
-                if 'flash' in m.name:
-                    target_model_name = m.name
-                    break
-        except:
-            pass
-
     st.divider()
     force_demo_ai = st.checkbox("🔧 強制使用模擬 AI 結果 (Demo用)", value=False)
+
+# --- [新功能] 智慧模型選擇器 ---
+# 這會自動找出當前環境支援的最新模型，避免 404
+def get_best_model_name(api_key):
+    try:
+        genai.configure(api_key=api_key)
+        # 取得所有可用模型
+        all_models = list(genai.list_models())
+        
+        # 過濾出支援 generateContent (文字生成) 的模型
+        text_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
+        
+        # 優先順序策略
+        for m in text_models:
+            if 'gemini-1.5-flash' in m: return m # 首選
+        for m in text_models:
+            if 'gemini-pro' in m: return m # 次選
+            
+        # 真的都沒有，就回傳第一個找到的
+        if text_models:
+            return text_models[0]
+            
+        return "gemini-pro" # 最後防線
+    except:
+        return "gemini-pro"
 
 # --- 黑名單設定 ---
 BLOCKED_FORUM_IDS = [
@@ -132,7 +138,6 @@ def get_demo_data():
 
 # --- 4. 定義函數：AI 分析 ---
 def analyze_with_gemini(df, use_fake=False):
-    # 使用 session state 中的 key
     current_key = st.session_state.valid_api_key
     is_simulated = use_fake or (not current_key)
 
@@ -147,13 +152,15 @@ def analyze_with_gemini(df, use_fake=False):
         df['關鍵重點'] = demo_keywords[:len(df)]
         return df, None, True 
     
-    # 真實分析
+    # --- 真實分析 (含自動型號偵測) ---
     try:
-        # 確保使用正確的 Key
         genai.configure(api_key=current_key)
         
-        # 直接使用自動偵測到的 target_model_name 或 fallback
-        model = genai.GenerativeModel('gemini-1.5-flash') 
+        # [關鍵修正] 不再寫死型號，而是動態取得最好的型號
+        best_model = get_best_model_name(current_key)
+        # st.toast(f"AI 連線中... 使用模型: {best_model}") # (除錯用，可註解)
+        
+        model = genai.GenerativeModel(best_model) 
         
         titles_text = "\n".join([f"{i+1}. {t}" for i, t in enumerate(df['標題'].tolist())])
         prompt = f"""
@@ -190,8 +197,6 @@ def analyze_with_gemini(df, use_fake=False):
         return df, None, False 
         
     except Exception as e:
-        # 如果是 404 錯誤，通常是型號問題，但我們前面已經盡量偵測了
-        # 這裡回傳錯誤訊息
         return df, str(e), False
 
 # --- 5. 主程式介面 ---
@@ -239,7 +244,6 @@ if st.session_state.data:
     with display_col2:
         st.info("💡 取得資料後，請點擊下方按鈕進行 AI 解讀")
         
-        # 確保只有在有 Key 或強制 Demo 時才顯示分析按鈕，或者按了會跳警告
         if st.button("🤖 AI 情緒分析"):
             with st.spinner("AI 正在閱讀標題並分析情緒..."):
                 result, error, is_sim = analyze_with_gemini(df, use_fake=force_demo_ai)
