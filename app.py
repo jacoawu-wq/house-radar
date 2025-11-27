@@ -6,6 +6,7 @@ import time
 import json
 import urllib.parse
 import xml.etree.ElementTree as ET
+import re
 
 # --- 1. 設定頁面 ---
 st.set_page_config(page_title="房市輿情雷達 AI 版", page_icon="🏠", layout="wide")
@@ -51,17 +52,37 @@ with st.sidebar:
     st.divider()
     force_demo_ai = st.checkbox("🔧 強制使用模擬 AI 結果 (Demo用)", value=False)
 
+# --- [新功能] 定義 Mobile01 房地產版塊白名單 ---
+# 只有網址包含這些代碼的，才算「純正」的房地產討論
+REAL_ESTATE_FORUM_IDS = [
+    "f=356", # 台北市房地產
+    "f=454", # 新北市房地產
+    "f=924", # 房地產綜合
+    "f=400", # 居家房事消費經驗
+    "f=469", # 重劃區
+    "f=335", # 居家修繕 (有時跟漏水有關)
+]
+
+def is_valid_real_estate_link(link):
+    """檢查連結是否屬於房地產版塊"""
+    if not link:
+        return False
+    # 只要連結中包含任何一個白名單 ID，就通過
+    for fid in REAL_ESTATE_FORUM_IDS:
+        if fid in link:
+            return True
+    return False
+
 # --- 3. 定義函數：透過 Google News 搜尋 Mobile01 ---
 def search_mobile01_via_google(keyword):
     if not keyword:
         keyword = "台北 房產"
         
-    # [核心修正] 加上房地產專屬關鍵字濾網
-    # 這會強迫 Google 只找跟房地產有關的討論，排除美食、旅遊等雜訊
+    # 搜尋語法加上負面關鍵字，先把明顯的雜訊踢掉
+    negative_terms = "-食記 -手機 -相機 -汽車 -菜單 -開箱 -遊記"
     real_estate_terms = "預售 OR 建案 OR 房價 OR 坪數 OR 格局 OR 公寓 OR 大樓 OR 豪宅 OR 置產 OR 買房"
     
-    # 組合後的搜尋語法類似： "大安區 (預售 OR 建案 OR ...)"
-    search_query = f"{keyword} ({real_estate_terms}) site:mobile01.com"
+    search_query = f"{keyword} ({real_estate_terms}) {negative_terms} site:mobile01.com"
     
     encoded_query = urllib.parse.quote(search_query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
@@ -72,7 +93,8 @@ def search_mobile01_via_google(keyword):
         articles = []
         items = root.findall('.//item')
         
-        for item in items[:10]:
+        # 我們抓多一點 (30筆)，因為過濾後可能會變少
+        for item in items[:30]:
             title_elem = item.find('title')
             link_elem = item.find('link')
             pub_elem = item.find('pubDate')
@@ -82,12 +104,22 @@ def search_mobile01_via_google(keyword):
             pub_date = pub_elem.text if pub_elem is not None else ""
             title = title.replace("- Mobile01", "").strip()
             
+            # [核心過濾邏輯]
+            # 1. 檢查是否為房地產版塊 (f=356 等)
+            if not is_valid_real_estate_link(link):
+                continue # 如果不是白名單內的版塊，直接跳過，不收錄
+            
             articles.append({
                 "標題": title,
                 "連結": link,
                 "來源": "Mobile01",
                 "發布時間": pub_date
             })
+            
+            # 如果湊滿 10 筆就夠了，停止 (避免分析太久)
+            if len(articles) >= 10:
+                break
+            
         return articles
     except Exception as e:
         st.error(f"搜尋發生錯誤: {e}")
@@ -95,11 +127,11 @@ def search_mobile01_via_google(keyword):
 
 def get_demo_data():
     return [
-        {"標題": "大安區預售屋開價破百萬合理嗎？最近看的心很累", "連結": "https://www.mobile01.com", "來源": "Demo"},
-        {"標題": "請問 XX 建案的施工品質如何？聽說之前有漏水案例", "連結": "https://www.mobile01.com", "來源": "Demo"},
-        {"標題": "分享：終於簽約了！推薦大家去看這間，格局真的很棒", "連結": "https://www.mobile01.com", "來源": "Demo"},
-        {"標題": "現在進場是不是高點？想買房自住但怕被套牢", "連結": "https://www.mobile01.com", "來源": "Demo"},
-        {"標題": "信義區舊公寓 vs 新北重劃區新成屋 怎麼選？", "連結": "https://www.mobile01.com", "來源": "Demo"},
+        {"標題": "大安區預售屋開價破百萬合理嗎？最近看的心很累", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=123456", "來源": "Demo"},
+        {"標題": "請問 XX 建案的施工品質如何？聽說之前有漏水案例", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=123457", "來源": "Demo"},
+        {"標題": "分享：終於簽約了！推薦大家去看這間，格局真的很棒", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=123458", "來源": "Demo"},
+        {"標題": "現在進場是不是高點？想買房自住但怕被套牢", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=123459", "來源": "Demo"},
+        {"標題": "信義區舊公寓 vs 新北重劃區新成屋 怎麼選？", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=123460", "來源": "Demo"},
     ]
 
 # --- 4. 定義函數：AI 分析 ---
@@ -181,10 +213,10 @@ with col_btn:
     st.write("") 
     st.write("")
     if st.button("🚀 搜尋真實資料", type="primary"):
-        with st.spinner(f'正在 Google 尋找 Mobile01 上關於「{keyword}」的文章...'):
+        with st.spinner(f'正在過濾 Mobile01 房地產版塊關於「{keyword}」的文章...'):
             st.session_state.data = search_mobile01_via_google(keyword)
             if not st.session_state.data:
-                st.warning("找不到相關資料，請換個關鍵字試試")
+                st.warning(f"在「房地產專屬版塊」中找不到關於「{keyword}」的討論，請嘗試其他關鍵字。")
 
 if st.button("📂 載入測試資料 (Demo Mode)", help="如果搜尋壞掉可以用這個"):
     st.session_state.data = get_demo_data()
@@ -194,7 +226,7 @@ if st.session_state.data:
     df = pd.DataFrame(st.session_state.data)
     
     st.divider()
-    st.write(f"### 📋 搜尋結果: {len(df)} 筆")
+    st.write(f"### 📋 搜尋結果: {len(df)} 筆 (已過濾非房地產版塊)")
     
     display_col1, display_col2 = st.columns([3, 1])
     
