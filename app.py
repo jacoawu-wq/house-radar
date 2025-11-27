@@ -40,13 +40,12 @@ def search_mobile01_via_google(keyword):
     try:
         response = requests.get(rss_url, timeout=10)
         
-        # [關鍵修正] 改用 'html.parser'，因為雲端不一定有 lxml，這樣寫最穩
+        # 使用 html.parser 解析
         soup = BeautifulSoup(response.text, 'html.parser') 
         items = soup.find_all('item')
         
         articles = []
         for item in items[:10]:
-            # 使用 getattr 防呆，避免找不到標籤時報錯
             title = item.title.text if item.title else "無標題"
             link = item.link.text if item.link else "#"
             pub_date = item.pubDate.text if item.pubDate else ""
@@ -68,11 +67,11 @@ def search_mobile01_via_google(keyword):
 
 def get_demo_data():
     return [
-        {"標題": "大安區預售屋開價破百萬合理嗎？最近看的心很累", "連結": "#", "來源": "Demo"},
-        {"標題": "請問 XX 建案的施工品質如何？聽說之前有漏水案例", "連結": "#", "來源": "Demo"},
-        {"標題": "分享：終於簽約了！推薦大家去看這間，格局真的很棒", "連結": "#", "來源": "Demo"},
-        {"標題": "現在進場是不是高點？想買房自住但怕被套牢", "連結": "#", "來源": "Demo"},
-        {"標題": "信義區舊公寓 vs 新北重劃區新成屋 怎麼選？", "連結": "#", "來源": "Demo"},
+        {"標題": "大安區預售屋開價破百萬合理嗎？最近看的心很累", "連結": "https://www.mobile01.com", "來源": "Demo"},
+        {"標題": "請問 XX 建案的施工品質如何？聽說之前有漏水案例", "連結": "https://www.mobile01.com", "來源": "Demo"},
+        {"標題": "分享：終於簽約了！推薦大家去看這間，格局真的很棒", "連結": "https://www.mobile01.com", "來源": "Demo"},
+        {"標題": "現在進場是不是高點？想買房自住但怕被套牢", "連結": "https://www.mobile01.com", "來源": "Demo"},
+        {"標題": "信義區舊公寓 vs 新北重劃區新成屋 怎麼選？", "連結": "https://www.mobile01.com", "來源": "Demo"},
     ]
 
 # --- 4. 定義函數：AI 分析 ---
@@ -192,7 +191,7 @@ if st.session_state.data:
     with display_col1:
         st.dataframe(
             df[['標題', '連結']], 
-            column_config={"連結": st.column_config.LinkColumn()},
+            column_config={"連結": st.column_config.LinkColumn("文章連結")}, # 讓連結可以點擊
             use_container_width=True
         )
     
@@ -221,8 +220,12 @@ if st.session_state.data:
 
         result_df = st.session_state.analyzed_data
         if 'AI情緒' in result_df.columns:
+            # [重要修正] 這裡把 '連結' 加回來了，並設定為 LinkColumn
             st.dataframe(
-                result_df[['標題', 'AI情緒', '關鍵重點']],
+                result_df[['標題', 'AI情緒', '關鍵重點', '連結']], 
+                column_config={
+                    "連結": st.column_config.LinkColumn("前往文章", display_text="點擊閱讀")
+                },
                 use_container_width=True
             )
             
