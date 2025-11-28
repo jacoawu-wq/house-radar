@@ -70,45 +70,44 @@ def get_topic_id(link):
     if match: return int(match.group(1))
     return 0
 
-# --- [防彈版] 自動下載中文字型 ---
+# --- [強力修復] 自動下載中文字型 ---
 def download_font():
-    font_filename = "NotoSansTC-Regular.ttf"
+    # 改用 "文泉驛微米黑"，這是一個非常穩定且常用的開源中文字型
+    font_filename = "WenQuanYiMicroHei.ttf"
+    font_url = "https://github.com/anthonyhilyard/GitHub-Chinese-Fonts/raw/master/WenQuanYiMicroHei.ttf"
     
-    # 檢查檔案是否存在且大小正常 (小於 100KB 通常是壞檔)
+    # 檢查檔案是否存在
     if os.path.exists(font_filename):
-        if os.path.getsize(font_filename) < 100000: 
-            os.remove(font_filename) # 刪除壞檔
+        # 如果檔案太小 (小於 1MB)，代表上次下載失敗是壞檔，刪掉重抓
+        if os.path.getsize(font_filename) < 1000000:
+            os.remove(font_filename)
         else:
             return font_filename # 檔案正常，直接回傳
     
-    # 備用下載連結列表 (如果第一個掛了，試第二個)
-    urls = [
-        "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf",
-        "https://github.com/google/fonts/raw/main/ofl/notosans/NotoSans-Regular.ttf" # 備用英文體，至少不報錯
-    ]
-    
-    for url in urls:
-        try:
-            with st.spinner(f"正在下載字型資源..."):
-                response = requests.get(url, timeout=10)
-                if response.status_code == 200:
-                    with open(font_filename, "wb") as f:
-                        f.write(response.content)
-                    # 再次檢查下載下來的是不是壞檔
-                    if os.path.getsize(font_filename) > 100000:
-                        return font_filename
-        except:
-            continue # 試下一個連結
-            
-    return None # 真的都下載失敗
+    # 開始下載
+    try:
+        with st.spinner("正在下載中文字型資源 (首次需時約 10 秒)..."):
+            response = requests.get(font_url, timeout=30)
+            if response.status_code == 200:
+                with open(font_filename, "wb") as f:
+                    f.write(response.content)
+                return font_filename
+            else:
+                st.warning("字型下載連線失敗，文字雲將無法顯示中文。")
+                return None
+    except Exception as e:
+        st.warning(f"字型下載錯誤: {e}")
+        return None
 
-# --- [防彈版] 產生文字雲 ---
+# --- 產生文字雲 ---
 def generate_wordcloud(titles_list):
     text = " ".join(titles_list)
+    # 設定停用詞
     stopwords = {
         "的", "了", "在", "是", "我", "有", "和", "就", "人", "都", "一個", "上", "也", "很", "到", "說", "要", "去", "你",
         "會", "著", "沒有", "看", "好", "自己", "這", "請問", "請益", "討論", "分享", "問題", "大家", "知道", "Mobile01",
-        "什麼", "怎麼", "可以", "真的", "因為", "所以", "如果", "但是", "比較", "覺得", "現在", "還是", "有沒有"
+        "什麼", "怎麼", "可以", "真的", "因為", "所以", "如果", "但是", "比較", "覺得", "現在", "還是", "有沒有", "文章",
+        "標題", "連結", "來源", "發布時間"
     }
     
     try:
@@ -116,25 +115,27 @@ def generate_wordcloud(titles_list):
         filtered_words = [word for word in words if word not in stopwords and len(word) > 1]
         text_clean = " ".join(filtered_words)
         
-        if not text_clean.strip(): return None # 沒字可畫
+        if not text_clean.strip(): return None 
 
+        # 取得字型路徑
         font_path = download_font()
         
-        # 關鍵修改：如果字型下載失敗，或者畫圖出錯，不要讓程式崩潰
         if font_path:
             wc = WordCloud(
-                font_path=font_path, 
+                font_path=font_path, # 指定中文字型
                 background_color="white",
                 width=800, height=400,
-                max_words=100, 
-                colormap="viridis"
+                max_words=80, 
+                colormap="viridis",
+                font_step=2,
+                min_font_size=10
             ).generate(text_clean)
         else:
-            # 沒字型就用預設的 (中文會變方塊，但至少不會 Crash)
+            # 沒字型就用預設 (會變方塊，但至少有圖)
             wc = WordCloud(
                 background_color="white",
                 width=800, height=400,
-                max_words=100
+                max_words=80
             ).generate(text_clean)
         
         fig, ax = plt.subplots(figsize=(10, 5))
@@ -143,7 +144,6 @@ def generate_wordcloud(titles_list):
         return fig
 
     except Exception as e:
-        # 終極攔截：不管發生什麼錯，都只印出錯誤但不當機
         print(f"文字雲繪製失敗: {e}") 
         return None
 
@@ -309,7 +309,6 @@ if st.session_state.data:
             
             with col_wc:
                 st.subheader("☁️ 話題熱點文字雲")
-                # [保護] 用 try-except 產生文字雲
                 try:
                     wc_fig = generate_wordcloud(st.session_state.data[i]['標題'] for i in range(len(st.session_state.data)))
                     if wc_fig:
@@ -317,7 +316,7 @@ if st.session_state.data:
                     else:
                         st.warning("文字雲產生失敗 (可能字型下載不完全)，但不影響其他功能。")
                 except Exception as wc_error:
-                     st.warning(f"文字雲暫時無法顯示")
+                     st.warning(f"文字雲暫時無法顯示: {wc_error}")
 
             with col_chart:
                 st.subheader("📈 情緒分佈指標")
