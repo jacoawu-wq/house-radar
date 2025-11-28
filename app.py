@@ -10,7 +10,7 @@ import re
 import jieba 
 from wordcloud import WordCloud 
 import matplotlib.pyplot as plt 
-import os # 用來檢查檔案是否存在
+import os
 
 # --- 1. 設定頁面 ---
 st.set_page_config(page_title="房市輿情雷達 AI 版", page_icon="🏠", layout="wide")
@@ -70,27 +70,39 @@ def get_topic_id(link):
     if match: return int(match.group(1))
     return 0
 
-# --- [新功能] 自動下載中文字型 ---
+# --- [防彈版] 自動下載中文字型 ---
 def download_font():
     font_filename = "NotoSansTC-Regular.ttf"
-    # 如果檔案已經存在，就不用再下載
+    
+    # 檢查檔案是否存在且大小正常 (小於 100KB 通常是壞檔)
     if os.path.exists(font_filename):
-        return font_filename
+        if os.path.getsize(font_filename) < 100000: 
+            os.remove(font_filename) # 刪除壞檔
+        else:
+            return font_filename # 檔案正常，直接回傳
     
-    # 這是 Google Fonts 的原始檔案連結 (思源黑體)
-    url = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+    # 備用下載連結列表 (如果第一個掛了，試第二個)
+    urls = [
+        "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf",
+        "https://github.com/google/fonts/raw/main/ofl/notosans/NotoSans-Regular.ttf" # 備用英文體，至少不報錯
+    ]
     
-    try:
-        with st.spinner("正在下載中文字型檔 (初次啟動需時較久)..."):
-            response = requests.get(url)
-            with open(font_filename, "wb") as f:
-                f.write(response.content)
-        return font_filename
-    except Exception as e:
-        st.error(f"字型下載失敗: {e}")
-        return None
+    for url in urls:
+        try:
+            with st.spinner(f"正在下載字型資源..."):
+                response = requests.get(url, timeout=10)
+                if response.status_code == 200:
+                    with open(font_filename, "wb") as f:
+                        f.write(response.content)
+                    # 再次檢查下載下來的是不是壞檔
+                    if os.path.getsize(font_filename) > 100000:
+                        return font_filename
+        except:
+            continue # 試下一個連結
+            
+    return None # 真的都下載失敗
 
-# --- 產生文字雲 ---
+# --- [防彈版] 產生文字雲 ---
 def generate_wordcloud(titles_list):
     text = " ".join(titles_list)
     stopwords = {
@@ -98,28 +110,42 @@ def generate_wordcloud(titles_list):
         "會", "著", "沒有", "看", "好", "自己", "這", "請問", "請益", "討論", "分享", "問題", "大家", "知道", "Mobile01",
         "什麼", "怎麼", "可以", "真的", "因為", "所以", "如果", "但是", "比較", "覺得", "現在", "還是", "有沒有"
     }
-    words = jieba.cut(text)
-    filtered_words = [word for word in words if word not in stopwords and len(word) > 1]
-    text_clean = " ".join(filtered_words)
     
-    # [修改] 這裡呼叫下載函式，確保有字型可用
-    font_path = download_font()
-    
-    if not font_path:
-        return None # 下載失敗就不畫了
+    try:
+        words = jieba.cut(text)
+        filtered_words = [word for word in words if word not in stopwords and len(word) > 1]
+        text_clean = " ".join(filtered_words)
+        
+        if not text_clean.strip(): return None # 沒字可畫
 
-    wc = WordCloud(
-        font_path=font_path, 
-        background_color="white",
-        width=800, height=400,
-        max_words=100, 
-        colormap="viridis"
-    ).generate(text_clean)
-    
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.imshow(wc, interpolation="bilinear")
-    ax.axis("off")
-    return fig
+        font_path = download_font()
+        
+        # 關鍵修改：如果字型下載失敗，或者畫圖出錯，不要讓程式崩潰
+        if font_path:
+            wc = WordCloud(
+                font_path=font_path, 
+                background_color="white",
+                width=800, height=400,
+                max_words=100, 
+                colormap="viridis"
+            ).generate(text_clean)
+        else:
+            # 沒字型就用預設的 (中文會變方塊，但至少不會 Crash)
+            wc = WordCloud(
+                background_color="white",
+                width=800, height=400,
+                max_words=100
+            ).generate(text_clean)
+        
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.imshow(wc, interpolation="bilinear")
+        ax.axis("off")
+        return fig
+
+    except Exception as e:
+        # 終極攔截：不管發生什麼錯，都只印出錯誤但不當機
+        print(f"文字雲繪製失敗: {e}") 
+        return None
 
 # --- 3. 搜尋函數 ---
 def search_mobile01_via_google(keyword):
@@ -258,7 +284,7 @@ if st.session_state.data:
         
         if st.session_state.analyzed_data is None: 
             if st.button("🤖 啟動 AI 全面解讀 (包含文字雲)", type="primary"):
-                with st.spinner("AI 正在閱讀標題、產生摘要並下載字型繪製文字雲..."):
+                with st.spinner("AI 正在閱讀標題、產生摘要並繪製文字雲..."):
                     result_df, summary, error, is_sim = analyze_with_gemini(df, use_fake=force_demo_ai)
                     st.session_state.analyzed_data = result_df
                     st.session_state.summary_report = summary
@@ -283,9 +309,15 @@ if st.session_state.data:
             
             with col_wc:
                 st.subheader("☁️ 話題熱點文字雲")
-                wc_fig = generate_wordcloud(st.session_state.data[i]['標題'] for i in range(len(st.session_state.data)))
-                if wc_fig:
-                    st.pyplot(wc_fig)
+                # [保護] 用 try-except 產生文字雲
+                try:
+                    wc_fig = generate_wordcloud(st.session_state.data[i]['標題'] for i in range(len(st.session_state.data)))
+                    if wc_fig:
+                        st.pyplot(wc_fig)
+                    else:
+                        st.warning("文字雲產生失敗 (可能字型下載不完全)，但不影響其他功能。")
+                except Exception as wc_error:
+                     st.warning(f"文字雲暫時無法顯示")
 
             with col_chart:
                 st.subheader("📈 情緒分佈指標")
