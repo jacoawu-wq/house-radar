@@ -7,14 +7,15 @@ import json
 import urllib.parse
 import xml.etree.ElementTree as ET
 import re
-import jieba # 中文斷詞
-from wordcloud import WordCloud # 文字雲
-import matplotlib.pyplot as plt # 繪圖
+import jieba 
+from wordcloud import WordCloud 
+import matplotlib.pyplot as plt 
+import os # 用來檢查檔案是否存在
 
 # --- 1. 設定頁面 ---
 st.set_page_config(page_title="房市輿情雷達 AI 版", page_icon="🏠", layout="wide")
 
-# --- 2. 側邊欄 ---
+# --- 2. 側邊欄設定 ---
 with st.sidebar:
     st.header("⚙️ 設定")
     if 'valid_api_key' not in st.session_state:
@@ -69,45 +70,56 @@ def get_topic_id(link):
     if match: return int(match.group(1))
     return 0
 
-# --- [新功能] 產生文字雲 ---
-def generate_wordcloud(titles_list):
-    # 1. 將所有標題合併成一個字串
-    text = " ".join(titles_list)
+# --- [新功能] 自動下載中文字型 ---
+def download_font():
+    font_filename = "NotoSansTC-Regular.ttf"
+    # 如果檔案已經存在，就不用再下載
+    if os.path.exists(font_filename):
+        return font_filename
     
-    # 2. 設定停用詞 (不重要的字)
+    # 這是 Google Fonts 的原始檔案連結 (思源黑體)
+    url = "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf"
+    
+    try:
+        with st.spinner("正在下載中文字型檔 (初次啟動需時較久)..."):
+            response = requests.get(url)
+            with open(font_filename, "wb") as f:
+                f.write(response.content)
+        return font_filename
+    except Exception as e:
+        st.error(f"字型下載失敗: {e}")
+        return None
+
+# --- 產生文字雲 ---
+def generate_wordcloud(titles_list):
+    text = " ".join(titles_list)
     stopwords = {
         "的", "了", "在", "是", "我", "有", "和", "就", "人", "都", "一個", "上", "也", "很", "到", "說", "要", "去", "你",
         "會", "著", "沒有", "看", "好", "自己", "這", "請問", "請益", "討論", "分享", "問題", "大家", "知道", "Mobile01",
         "什麼", "怎麼", "可以", "真的", "因為", "所以", "如果", "但是", "比較", "覺得", "現在", "還是", "有沒有"
     }
-    
-    # 3. 使用 jieba 斷詞
     words = jieba.cut(text)
-    filtered_words = [word for word in words if word not in stopwords and len(word) > 1] # 去掉單字和停用詞
+    filtered_words = [word for word in words if word not in stopwords and len(word) > 1]
     text_clean = " ".join(filtered_words)
     
-    # 4. 設定字型路徑 (必須與你上傳的檔案名稱一模一樣)
-    # 假設你上傳的是 TaipeiSansTCBeta-Regular.ttf
-    font_path = "TaipeiSansTCBeta-Regular.ttf" 
+    # [修改] 這裡呼叫下載函式，確保有字型可用
+    font_path = download_font()
     
-    try:
-        # 5. 產生文字雲
-        wc = WordCloud(
-            font_path=font_path, # 使用中文字型
-            background_color="white", # 背景顏色
-            width=800, height=400,
-            max_words=100, # 最大顯示字數
-            colormap="viridis" # 配色方案
-        ).generate(text_clean)
-        
-        # 6. 使用 matplotlib 繪圖
-        fig, ax = plt.subplots(figsize=(10, 5))
-        ax.imshow(wc, interpolation="bilinear")
-        ax.axis("off") # 關閉座標軸
-        return fig
-    except FileNotFoundError:
-        st.error(f"找不到字型檔案：{font_path}。請確認已上傳該檔案到 GitHub。")
-        return None
+    if not font_path:
+        return None # 下載失敗就不畫了
+
+    wc = WordCloud(
+        font_path=font_path, 
+        background_color="white",
+        width=800, height=400,
+        max_words=100, 
+        colormap="viridis"
+    ).generate(text_clean)
+    
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.imshow(wc, interpolation="bilinear")
+    ax.axis("off")
+    return fig
 
 # --- 3. 搜尋函數 ---
 def search_mobile01_via_google(keyword):
@@ -130,7 +142,7 @@ def search_mobile01_via_google(keyword):
             tid = get_topic_id(link)
             articles.append({"標題": title, "連結": link, "來源": "Mobile01", "發布時間": pub_date, "topic_id": tid})
         articles.sort(key=lambda x: x['topic_id'], reverse=True)
-        return articles[:15] # 稍微增加到 15 筆，讓文字雲豐富一點
+        return articles[:15] 
     except Exception as e:
         st.error(f"搜尋錯誤: {e}"); return []
 
@@ -141,45 +153,39 @@ def get_demo_data():
             {"標題": "現在進場北士科是不是高點？怕被套牢", "連結": "https://www.mobile01.com/t=666"},
             {"標題": "信義區舊公寓 vs 北士科新成屋 怎麼選？", "連結": "https://www.mobile01.com/t=555"}]
 
-# --- 4. AI 分析 (升級版：含市場快報) ---
+# --- 4. AI 分析 ---
 def analyze_with_gemini(df, use_fake=False):
     current_key = st.session_state.valid_api_key
     is_simulated = use_fake or (not current_key)
 
-    # [模擬模式]
     if is_simulated:
         time.sleep(1)
-        # 模擬的總結報告
         fake_summary = f"【模擬快報】針對本次搜尋結果，整體市場氛圍偏向觀望與焦慮。網友討論焦點集中在「價格過高」與「建商品牌信任度」。部分討論提及「施工品質」與「漏水」疑慮，顯示買方對風險意識提高。"
-        
         demo_sentiments = ["焦慮", "負面", "正面", "觀望", "中立"] * 3
         demo_keywords = ["價格過高", "漏水疑慮", "格局方正", "高點套牢", "重劃區發展"] * 3
         df['AI情緒'] = demo_sentiments[:len(df)]
         df['關鍵重點'] = demo_keywords[:len(df)]
         return df, fake_summary, None, True
     
-    # [真實模式]
     try:
         genai.configure(api_key=current_key)
         best_model = get_best_model_name(current_key)
         model = genai.GenerativeModel(best_model) 
         titles_text = "\n".join([f"{i+1}. {t}" for i, t in enumerate(df['標題'].tolist())])
         
-        # [核心升級] 修改 Prompt，要求 AI 多回傳一個 summary 欄位
         prompt = f"""
         你是專業的房地產輿情分析師。請閱讀以下 Mobile01 討論區的標題：
         {titles_text}
         
         請執行兩項任務：
-        任務一：撰寫「市場輿情快報」(約 3-5 句話)。綜合分析這些標題反映出的整體市場情緒、網友最關注的熱點議題（如價格、品質、特定區域等）以及潛在風險。
+        任務一：撰寫「市場輿情快報」(約 3-5 句話)。綜合分析這些標題反映出的整體市場情緒、網友最關注的熱點議題。
         任務二：針對每一個標題進行詳細分析。
 
         請直接回傳一個 JSON 格式的資料，格式如下（不要 Markdown 標記）：
         {{
             "summary_report": "在這裡填寫你的市場輿情快報內容...",
             "details": [
-                {{"sentiment": "正面/負面/中立/焦慮/觀望", "keyword": "關鍵字1, 關鍵字2 (請提取最具代表性的名詞)"}},
-                ... (對應每個標題的分析結果)
+                {{"sentiment": "正面/負面/中立/焦慮/觀望", "keyword": "關鍵字1, 關鍵字2"}}
             ]
         }}
         確保 "details" 列表的長度與輸入的標題數量完全一致。
@@ -189,18 +195,15 @@ def analyze_with_gemini(df, use_fake=False):
         
         try:
             result_json = json.loads(clean_text)
-            # 解析新的 JSON 結構
             summary_report = result_json.get("summary_report", "AI 無法產生總結報告。")
             details = result_json.get("details", [])
         except:
-            # 如果 JSON 解析失敗的 fallback
             summary_report = "AI 回傳格式異常，無法解析總結報告。"
             details = []
 
         sentiments = [item.get('sentiment', '未知') for item in details]
         keywords = [item.get('keyword', '無') for item in details]
         
-        # 防呆補齊
         while len(sentiments) < len(df):
             sentiments.append("未知"); keywords.append("無")
             
@@ -212,7 +215,7 @@ def analyze_with_gemini(df, use_fake=False):
         return df, "", str(e), False
 
 # --- 5. 主程式介面 ---
-st.title("🏠 房市輿情雷達 + AI 洞察") # 標題改一下
+st.title("🏠 房市輿情雷達 + AI 洞察") 
 
 if 'data' not in st.session_state: st.session_state.data = []
 if 'analyzed_data' not in st.session_state: st.session_state.analyzed_data = None
@@ -227,39 +230,35 @@ with col_btn:
     if st.button("🚀 搜尋最新話題", type="primary"):
         with st.spinner(f'正在蒐集關於「{keyword}」的最新討論...'):
             st.session_state.data = search_mobile01_via_google(keyword)
-            # 搜尋新資料後，清空舊的分析結果
             st.session_state.analyzed_data = None
             st.session_state.summary_report = ""
             if not st.session_state.data: st.warning(f"找不到相關討論。")
 
 if st.button("📂 載入範例資料 (Demo)", help="搜尋不到時使用"):
     st.session_state.data = get_demo_data()
-    st.session_state.analyzed_data = None # 清空舊分析
+    st.session_state.analyzed_data = None 
     st.success("已載入模擬數據！")
 
-# --- 6. 顯示內容區 (引入 Tab) ---
+# --- 6. 顯示內容區 ---
 if st.session_state.data:
     df = pd.DataFrame(st.session_state.data)
     st.divider()
     
-    # [核心升級] 使用 Tabs 分頁
     tab1, tab2 = st.tabs(["📊 AI 洞察報告 & 文字雲", "📋 原始話題列表"])
     
-    with tab2: # 原始列表放到第二頁
+    with tab2: 
         st.write(f"共蒐集 {len(df)} 則最新話題")
         st.dataframe(df[['標題', '連結']], 
                      column_config={"連結": st.column_config.LinkColumn("文章連結")},
                      use_container_width=True)
         st.info("💡 請切換到「AI 洞察報告」分頁進行分析")
 
-    with tab1: # AI 報告是主頁
+    with tab1: 
         st.write("### 🧠 AI 輿情分析中心")
         
-        # 分析按鈕
-        if st.session_state.analyzed_data is None: # 還沒分析過才顯示按鈕
+        if st.session_state.analyzed_data is None: 
             if st.button("🤖 啟動 AI 全面解讀 (包含文字雲)", type="primary"):
-                with st.spinner("AI 正在閱讀標題、產生摘要並繪製文字雲..."):
-                    # 這裡接收 4 個回傳值
+                with st.spinner("AI 正在閱讀標題、產生摘要並下載字型繪製文字雲..."):
                     result_df, summary, error, is_sim = analyze_with_gemini(df, use_fake=force_demo_ai)
                     st.session_state.analyzed_data = result_df
                     st.session_state.summary_report = summary
@@ -267,40 +266,31 @@ if st.session_state.data:
                     st.session_state.error_msg = error
                     st.rerun()
         
-        # 顯示分析結果
         if st.session_state.analyzed_data is not None:
-            # 1. 顯示狀態
             if st.session_state.is_simulated:
                 st.warning("⚠️ 目前為「模擬演示模式」(無 API Key)")
             else:
                 st.success("✅ AI 真實分析完成")
             if st.session_state.error_msg: st.error(f"異常: {st.session_state.error_msg}")
             
-            # 2. [新功能] 顯示 AI 市場快報
             st.markdown("""---""")
             st.subheader("📝 AI 市場輿情快報")
             if st.session_state.summary_report:
-                # 用一個漂亮的框框把總結包起來
                 st.info(st.session_state.summary_report, icon="💡")
             
-            # 3. [新功能] 顯示文字雲和情緒圖
             st.markdown("""---""")
             col_wc, col_chart = st.columns([3, 2])
             
             with col_wc:
                 st.subheader("☁️ 話題熱點文字雲")
-                # 呼叫繪圖函數
                 wc_fig = generate_wordcloud(st.session_state.data[i]['標題'] for i in range(len(st.session_state.data)))
                 if wc_fig:
                     st.pyplot(wc_fig)
-                else:
-                    st.error("文字雲產生失敗，請檢查字型檔案是否上傳。")
 
             with col_chart:
                 st.subheader("📈 情緒分佈指標")
                 st.bar_chart(st.session_state.analyzed_data['AI情緒'].value_counts())
 
-            # 4. 詳細數據表
             st.markdown("""---""")
             st.subheader("🔍 詳細分析數據")
             with st.expander("點擊展開查看逐筆分析結果"):
