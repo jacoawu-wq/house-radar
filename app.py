@@ -11,25 +11,21 @@ import re
 # --- 1. 設定頁面 ---
 st.set_page_config(page_title="房市輿情雷達 AI 版", page_icon="🏠", layout="wide")
 
-# --- 2. 側邊欄：設定 API Key (含驗證按鈕 & 模型自動偵測) ---
+# --- 2. 側邊欄：設定 API Key ---
 with st.sidebar:
     st.header("⚙️ 設定")
     
     if 'valid_api_key' not in st.session_state:
         st.session_state.valid_api_key = st.secrets.get("GEMINI_API_KEY", None)
 
-    # 輸入與驗證區
     if not st.session_state.valid_api_key:
         user_input_key = st.text_input("請輸入 Google Gemini API Key", type="password")
-        
-        # [功能] 驗證按鈕
         if st.button("✅ 驗證並設定", type="primary"):
             if not user_input_key:
                 st.error("❌ 請輸入內容")
             else:
                 try:
                     genai.configure(api_key=user_input_key)
-                    # 試著列出模型來確認 Key 是活的
                     list(genai.list_models()) 
                     st.session_state.valid_api_key = user_input_key
                     st.success("驗證成功！")
@@ -47,36 +43,26 @@ with st.sidebar:
     st.divider()
     force_demo_ai = st.checkbox("🔧 強制使用模擬 AI 結果 (Demo用)", value=False)
 
-# --- [新功能] 智慧模型選擇器 ---
-# 這會自動找出當前環境支援的最新模型，避免 404
+# --- 模型智慧選擇 ---
 def get_best_model_name(api_key):
     try:
         genai.configure(api_key=api_key)
-        # 取得所有可用模型
         all_models = list(genai.list_models())
-        
-        # 過濾出支援 generateContent (文字生成) 的模型
         text_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
-        
-        # 優先順序策略
         for m in text_models:
-            if 'gemini-1.5-flash' in m: return m # 首選
+            if 'gemini-1.5-flash' in m: return m
         for m in text_models:
-            if 'gemini-pro' in m: return m # 次選
-            
-        # 真的都沒有，就回傳第一個找到的
-        if text_models:
-            return text_models[0]
-            
-        return "gemini-pro" # 最後防線
+            if 'gemini-pro' in m: return m
+        if text_models: return text_models[0]
+        return "gemini-pro"
     except:
         return "gemini-pro"
 
-# --- 黑名單設定 ---
+# --- 黑名單 ---
 BLOCKED_FORUM_IDS = [
     "f=214", "f=260", "f=261", # 汽車
     "f=565", "f=168", "f=738", # 家電
-    "f=61", "f=37", "f=320",   # 3C、旅遊
+    "f=61", "f=37", "f=320",   # 3C
 ]
 
 def is_blocked_link(link):
@@ -85,13 +71,25 @@ def is_blocked_link(link):
         if fid in link: return True
     return False
 
-# --- 3. 定義函數：透過 Google News 搜尋 Mobile01 ---
+# --- [殺手鐧] 提取 Mobile01 Topic ID ---
+def get_topic_id(link):
+    # 從網址中抓取 t=xxxxxx 的數字
+    # 數字越大 = 文章越新
+    match = re.search(r't=(\d+)', link)
+    if match:
+        return int(match.group(1))
+    return 0
+
+# --- 3. 定義函數：透過 Google News 搜尋 ---
 def search_mobile01_via_google(keyword):
     if not keyword:
         keyword = "台北 房產"
     
+    # [優化 1] 關鍵字策略：加上 when:1y (最近一年)
+    # 強迫 Google 吐出比較新的資料，不要給我 2018 年的
     real_estate_terms = "預售 OR 建案 OR 房價 OR 坪數 OR 格局 OR 公寓 OR 大樓 OR 豪宅 OR 置產 OR 買房"
-    search_query = f"{keyword} ({real_estate_terms}) site:mobile01.com"
+    search_query = f"{keyword} ({real_estate_terms}) site:mobile01.com when:1y"
+    
     encoded_query = urllib.parse.quote(search_query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     
@@ -101,7 +99,8 @@ def search_mobile01_via_google(keyword):
         articles = []
         items = root.findall('.//item')
         
-        for item in items[:30]:
+        # 為了重新排序，我們先抓多一點 (50筆)
+        for item in items[:50]:
             title_elem = item.find('title')
             link_elem = item.find('link')
             pub_elem = item.find('pubDate')
@@ -114,29 +113,38 @@ def search_mobile01_via_google(keyword):
             if is_blocked_link(link):
                 continue
             
+            # 計算 ID 以便排序
+            tid = get_topic_id(link)
+            
             articles.append({
                 "標題": title,
                 "連結": link,
                 "來源": "Mobile01",
-                "發布時間": pub_date
+                "發布時間": pub_date,
+                "topic_id": tid # 存起來排序用
             })
-            if len(articles) >= 10: break
-            
-        return articles
+        
+        # [優化 2] 依照 Topic ID 由大到小排序
+        # 這樣最新的建案討論串會跑到最上面，模仿 Mobile01 原生排序
+        articles.sort(key=lambda x: x['topic_id'], reverse=True)
+        
+        # 只回傳最新的 10 筆
+        return articles[:10]
+
     except Exception as e:
         st.error(f"搜尋發生錯誤: {e}")
         return []
 
 def get_demo_data():
     return [
-        {"標題": "大安區預售屋開價破百萬合理嗎？最近看的心很累", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=123456", "來源": "Demo"},
-        {"標題": "請問 XX 建案的施工品質如何？聽說之前有漏水案例", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=123457", "來源": "Demo"},
-        {"標題": "分享：終於簽約了！推薦大家去看這間，格局真的很棒", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=123458", "來源": "Demo"},
-        {"標題": "現在進場是不是高點？想買房自住但怕被套牢", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=123459", "來源": "Demo"},
-        {"標題": "信義區舊公寓 vs 新北重劃區新成屋 怎麼選？", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=123460", "來源": "Demo"},
+        {"標題": "北士科預售屋開價破百萬合理嗎？最近看的心很累", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=9999999", "來源": "Demo"},
+        {"標題": "請問 XX 建案的施工品質如何？聽說之前有漏水案例", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=8888888", "來源": "Demo"},
+        {"標題": "分享：終於簽約了！推薦大家去看這間，格局真的很棒", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=7777777", "來源": "Demo"},
+        {"標題": "現在進場是不是高點？想買房自住但怕被套牢", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=6666666", "來源": "Demo"},
+        {"標題": "信義區舊公寓 vs 新北重劃區新成屋 怎麼選？", "連結": "https://www.mobile01.com/topicdetail.php?f=356&t=5555555", "來源": "Demo"},
     ]
 
-# --- 4. 定義函數：AI 分析 ---
+# --- 4. AI 分析 ---
 def analyze_with_gemini(df, use_fake=False):
     current_key = st.session_state.valid_api_key
     is_simulated = use_fake or (not current_key)
@@ -152,14 +160,9 @@ def analyze_with_gemini(df, use_fake=False):
         df['關鍵重點'] = demo_keywords[:len(df)]
         return df, None, True 
     
-    # --- 真實分析 (含自動型號偵測) ---
     try:
         genai.configure(api_key=current_key)
-        
-        # [關鍵修正] 不再寫死型號，而是動態取得最好的型號
         best_model = get_best_model_name(current_key)
-        # st.toast(f"AI 連線中... 使用模型: {best_model}") # (除錯用，可註解)
-        
         model = genai.GenerativeModel(best_model) 
         
         titles_text = "\n".join([f"{i+1}. {t}" for i, t in enumerate(df['標題'].tolist())])
@@ -215,7 +218,7 @@ with col_btn:
     st.write("") 
     st.write("")
     if st.button("🚀 搜尋真實資料", type="primary"):
-        with st.spinner(f'正在 Google 尋找 Mobile01 上關於「{keyword}」的文章...'):
+        with st.spinner(f'正在搜尋 Mobile01 近一年關於「{keyword}」的最新討論...'):
             st.session_state.data = search_mobile01_via_google(keyword)
             if not st.session_state.data:
                 st.warning(f"Google 搜尋結果較少，請嘗試縮短關鍵字。")
@@ -228,7 +231,7 @@ if st.session_state.data:
     df = pd.DataFrame(st.session_state.data)
     
     st.divider()
-    st.write(f"### 📋 搜尋結果: {len(df)} 筆 (排除車版、家電版)")
+    st.write(f"### 📋 搜尋結果: {len(df)} 筆 (已依照 Topic ID 新舊排序)")
     
     display_col1, display_col2 = st.columns([3, 1])
     
