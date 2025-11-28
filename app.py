@@ -11,6 +11,7 @@ import jieba
 from wordcloud import WordCloud 
 import matplotlib.pyplot as plt 
 import os
+import altair as alt # [新增] 用來畫更漂亮的長條圖
 
 # --- 1. 設定頁面 ---
 st.set_page_config(page_title="房市輿情雷達 AI 版", page_icon="🏠", layout="wide")
@@ -70,45 +71,32 @@ def get_topic_id(link):
     if match: return int(match.group(1))
     return 0
 
-# --- [狡兔三窟版] 自動下載中文字型 ---
+# --- 自動下載中文字型 ---
 def download_font():
-    font_filename = "ChineseFont.ttf" # 統一名稱
-    
-    # 檢查檔案是否存在且大小正常 (小於 1MB 視為壞檔)
+    font_filename = "ChineseFont.ttf" 
     if os.path.exists(font_filename):
         if os.path.getsize(font_filename) < 1000000: 
-            os.remove(font_filename) # 刪除壞檔
+            os.remove(font_filename) 
         else:
-            return font_filename # 檔案正常，直接回傳
-    
-    # 備用下載連結列表 (優先順序：Google -> 粉圓體 -> 文泉驛)
+            return font_filename 
     urls = [
         "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanstc/NotoSansTC-Regular.ttf",
         "https://raw.githubusercontent.com/justfont/open-huninn-font/master/font/jf-openhuninn-1.1.ttf",
         "https://github.com/anthonyhilyard/GitHub-Chinese-Fonts/raw/master/WenQuanYiMicroHei.ttf"
     ]
-    
-    # 顯示進度條
     progress_text = "正在下載中文字型資源... (嘗試多個來源)"
     my_bar = st.progress(0, text=progress_text)
-
     for i, url in enumerate(urls):
         try:
-            # 更新進度條
             my_bar.progress((i + 1) * 33, text=f"正在嘗試下載字型來源 {i+1}/3 ...")
-            
-            response = requests.get(url, timeout=60) # 拉長超時時間到 60 秒
+            response = requests.get(url, timeout=60) 
             if response.status_code == 200:
                 with open(font_filename, "wb") as f:
                     f.write(response.content)
-                
-                # 再次檢查下載下來的是不是壞檔
                 if os.path.getsize(font_filename) > 1000000:
-                    my_bar.empty() # 清除進度條
+                    my_bar.empty() 
                     return font_filename
-        except:
-            continue # 試下一個連結
-            
+        except: continue
     my_bar.empty()
     st.warning("所有字型下載來源均失敗，文字雲將無法顯示中文。")
     return None
@@ -120,41 +108,24 @@ def generate_wordcloud(titles_list):
         "的", "了", "在", "是", "我", "有", "和", "就", "人", "都", "一個", "上", "也", "很", "到", "說", "要", "去", "你",
         "會", "著", "沒有", "看", "好", "自己", "這", "請問", "請益", "討論", "分享", "問題", "大家", "知道", "Mobile01",
         "什麼", "怎麼", "可以", "真的", "因為", "所以", "如果", "但是", "比較", "覺得", "現在", "還是", "有沒有", "文章",
-        "標題", "連結", "來源", "發布時間", "北士科" # 把搜尋關鍵字也加入停用詞，避免它佔據版面
+        "標題", "連結", "來源", "發布時間", "北士科", "房產"
     }
-    
     try:
         words = jieba.cut(text)
         filtered_words = [word for word in words if word not in stopwords and len(word) > 1]
         text_clean = " ".join(filtered_words)
-        
         if not text_clean.strip(): return None 
-
         font_path = download_font()
-        
         if font_path:
             wc = WordCloud(
-                font_path=font_path, 
-                background_color="white",
-                width=800, height=400,
-                max_words=80, 
-                colormap="viridis",
-                font_step=2,
-                min_font_size=10
+                font_path=font_path, background_color="white", width=800, height=400, max_words=80, colormap="viridis", font_step=2, min_font_size=10
             ).generate(text_clean)
         else:
-            # 沒字型就用預設
-            wc = WordCloud(
-                background_color="white",
-                width=800, height=400,
-                max_words=80
-            ).generate(text_clean)
-        
+            wc = WordCloud(background_color="white", width=800, height=400, max_words=80).generate(text_clean)
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.imshow(wc, interpolation="bilinear")
         ax.axis("off")
         return fig
-
     except Exception as e:
         print(f"文字雲繪製失敗: {e}") 
         return None
@@ -210,15 +181,12 @@ def analyze_with_gemini(df, use_fake=False):
         best_model = get_best_model_name(current_key)
         model = genai.GenerativeModel(best_model) 
         titles_text = "\n".join([f"{i+1}. {t}" for i, t in enumerate(df['標題'].tolist())])
-        
         prompt = f"""
         你是專業的房地產輿情分析師。請閱讀以下 Mobile01 討論區的標題：
         {titles_text}
-        
         請執行兩項任務：
         任務一：撰寫「市場輿情快報」(約 3-5 句話)。綜合分析這些標題反映出的整體市場情緒、網友最關注的熱點議題。
         任務二：針對每一個標題進行詳細分析。
-
         請直接回傳一個 JSON 格式的資料，格式如下（不要 Markdown 標記）：
         {{
             "summary_report": "在這裡填寫你的市場輿情快報內容...",
@@ -226,11 +194,9 @@ def analyze_with_gemini(df, use_fake=False):
                 {{"sentiment": "正面/負面/中立/焦慮/觀望", "keyword": "關鍵字1, 關鍵字2"}}
             ]
         }}
-        確保 "details" 列表的長度與輸入的標題數量完全一致。
         """
         response = model.generate_content(prompt)
         clean_text = response.text.replace("```json", "").replace("```python", "").replace("```", "").strip()
-        
         try:
             result_json = json.loads(clean_text)
             summary_report = result_json.get("summary_report", "AI 無法產生總結報告。")
@@ -238,17 +204,13 @@ def analyze_with_gemini(df, use_fake=False):
         except:
             summary_report = "AI 回傳格式異常，無法解析總結報告。"
             details = []
-
         sentiments = [item.get('sentiment', '未知') for item in details]
         keywords = [item.get('keyword', '無') for item in details]
-        
         while len(sentiments) < len(df):
             sentiments.append("未知"); keywords.append("無")
-            
         df['AI情緒'] = sentiments[:len(df)]
         df['關鍵重點'] = keywords[:len(df)]
         return df, summary_report, None, False 
-        
     except Exception as e:
         return df, "", str(e), False
 
@@ -282,16 +244,19 @@ if st.session_state.data:
     df = pd.DataFrame(st.session_state.data)
     st.divider()
     
-    tab1, tab2 = st.tabs(["📊 AI 洞察報告 & 文字雲", "📋 原始話題列表"])
+    # [調整 1] 分頁順序對調：列表在前，AI 報告在後
+    tab1, tab2 = st.tabs(["📋 原始話題列表", "📊 AI 洞察報告 & 文字雲"])
     
-    with tab2: 
+    # [調整 1] 這是原本的列表，現在是第一個分頁 (Default active)
+    with tab1: 
         st.write(f"共蒐集 {len(df)} 則最新話題")
         st.dataframe(df[['標題', '連結']], 
                      column_config={"連結": st.column_config.LinkColumn("文章連結")},
                      use_container_width=True)
-        st.info("💡 請切換到「AI 洞察報告」分頁進行分析")
+        st.info("👉 點擊上方「📊 AI 洞察報告」分頁，啟動 AI 分析功能")
 
-    with tab1: 
+    # [調整 1] 這是 AI 報告，現在是第二個分頁
+    with tab2: 
         st.write("### 🧠 AI 輿情分析中心")
         
         if st.session_state.analyzed_data is None: 
@@ -332,7 +297,20 @@ if st.session_state.data:
 
             with col_chart:
                 st.subheader("📈 情緒分佈指標")
-                st.bar_chart(st.session_state.analyzed_data['AI情緒'].value_counts())
+                # [調整 2] 改用 Altair 畫圖，強制 X 軸文字水平顯示 (0度)
+                if 'AI情緒' in st.session_state.analyzed_data.columns:
+                    chart_data = st.session_state.analyzed_data['AI情緒'].value_counts().reset_index()
+                    chart_data.columns = ['情緒', '數量']
+                    
+                    chart = alt.Chart(chart_data).mark_bar().encode(
+                        x=alt.X('情緒', axis=alt.Axis(labelAngle=0, title='情緒類型')), # 0度角 = 水平
+                        y=alt.Y('數量', axis=alt.Axis(title='文章數量')),
+                        color=alt.value('#1f77b4'),
+                        tooltip=['情緒', '數量']
+                    ).properties(
+                        height=300
+                    )
+                    st.altair_chart(chart, use_container_width=True)
 
             st.markdown("""---""")
             st.subheader("🔍 詳細分析數據")
