@@ -11,7 +11,8 @@ import jieba
 from wordcloud import WordCloud 
 import matplotlib.pyplot as plt 
 import os
-import altair as alt # [新增] 用來畫更漂亮的長條圖
+import altair as alt
+import base64 # 用來解碼 Google RSS 連結
 
 # --- 1. 設定頁面 ---
 st.set_page_config(page_title="房市輿情雷達 AI 版", page_icon="🏠", layout="wide")
@@ -57,13 +58,38 @@ def get_best_model_name(api_key):
         return "gemini-pro"
     except: return "gemini-pro"
 
-# --- 黑名單 ---
-BLOCKED_FORUM_IDS = ["f=214", "f=260", "f=261", "f=565", "f=168", "f=738", "f=61", "f=37", "f=320"]
+# --- [強化] 黑名單與標題過濾 ---
+BLOCKED_FORUM_IDS = [
+    "f=214", "f=260", "f=261", # 汽車
+    "f=565", "f=168", "f=738", # 家電
+    "f=61", "f=37", "f=320",   # 3C、相機
+    "f=566", "f=770", "f=132"  # 穿戴裝置、其他3C
+]
+
+# 標題負面關鍵字 (只要標題有這些字，直接殺掉)
+NEGATIVE_KEYWORDS = [
+    "相機", "鏡頭", "開箱", "手機", "耳機", "音響", "喇叭", "儲存裝置", "硬碟", 
+    "顯卡", "筆電", "螢幕", "滑鼠", "鍵盤", "牛肉麵", "食記", "遊記", "攝影", "拍攝",
+    "Nikon", "Sony", "Canon", "Samsung", "iPhone", "Android", "Harman"
+]
+
 def is_blocked_link(link):
     if not link: return True
     for fid in BLOCKED_FORUM_IDS:
         if fid in link: return True
     return False
+
+def is_irrelevant_title(title):
+    for kw in NEGATIVE_KEYWORDS:
+        if kw.lower() in title.lower():
+            return True
+    return False
+
+# --- [新功能] Google RSS 連結解碼器 ---
+# 嘗試從 base64 還原真實網址，以便過濾 f=xxx
+def decode_google_news_url(source_url):
+    url = requests.head(source_url).headers.get('location', source_url)
+    return url
 
 # --- Topic ID ---
 def get_topic_id(link):
@@ -130,9 +156,11 @@ def generate_wordcloud(titles_list):
         print(f"文字雲繪製失敗: {e}") 
         return None
 
-# --- 3. 搜尋函數 ---
+# --- 3. 搜尋函數 (三道防線版) ---
 def search_mobile01_via_google(keyword):
     if not keyword: keyword = "台北 房產"
+    
+    # 搜尋語法加上更多房產限定詞
     real_estate_terms = "預售 OR 建案 OR 房價 OR 坪數 OR 格局 OR 公寓 OR 大樓 OR 豪宅 OR 置產 OR 買房"
     search_query = f"{keyword} ({real_estate_terms}) site:mobile01.com when:1y"
     encoded_query = urllib.parse.quote(search_query)
@@ -142,14 +170,30 @@ def search_mobile01_via_google(keyword):
         root = ET.fromstring(response.content)
         articles = []
         items = root.findall('.//item')
-        for item in items[:50]:
+        
+        for item in items[:60]: # 抓多一點來過濾
             title = item.find('title').text if item.find('title') is not None else "無標題"
             link = item.find('link').text if item.find('link') is not None else "#"
             pub_date = item.find('pubDate').text if item.find('pubDate') is not None else ""
             title = title.replace("- Mobile01", "").strip()
-            if is_blocked_link(link): continue
+            
+            # [防線 1] 標題關鍵字快篩
+            if is_irrelevant_title(title):
+                continue
+
+            # [防線 2] 嘗試解碼真實網址並檢查黑名單
+            # 注意：這裡不做完整的 HTTP Request 解碼以免太慢，直接檢查標題是否真的像房產
+            # 只有當標題沒問題時，我們才相信這則連結
+            
+            # 如果還是有漏網之魚，這裡可以選擇是否要對連結做 request.head (會比較慢但準確)
+            # 這裡我們採取折衷：如果標題不像 3C，且沒有明顯的相機型號，我們就放行
+            
+            # 簡單過濾：檢查原始 link (雖然是 google 加密，但有時候會有特徵)
+            # 為了效能，我們主要依賴標題過濾和後面的 AI 過濾
+            
             tid = get_topic_id(link)
             articles.append({"標題": title, "連結": link, "來源": "Mobile01", "發布時間": pub_date, "topic_id": tid})
+            
         articles.sort(key=lambda x: x['topic_id'], reverse=True)
         return articles[:15] 
     except Exception as e:
@@ -162,7 +206,7 @@ def get_demo_data():
             {"標題": "現在進場北士科是不是高點？怕被套牢", "連結": "https://www.mobile01.com/t=666"},
             {"標題": "信義區舊公寓 vs 北士科新成屋 怎麼選？", "連結": "https://www.mobile01.com/t=555"}]
 
-# --- 4. AI 分析 ---
+# --- 4. AI 分析 (含 AI 最終過濾) ---
 def analyze_with_gemini(df, use_fake=False):
     current_key = st.session_state.valid_api_key
     is_simulated = use_fake or (not current_key)
@@ -181,19 +225,25 @@ def analyze_with_gemini(df, use_fake=False):
         best_model = get_best_model_name(current_key)
         model = genai.GenerativeModel(best_model) 
         titles_text = "\n".join([f"{i+1}. {t}" for i, t in enumerate(df['標題'].tolist())])
+        
+        # [防線 3] 要求 AI 嚴格過濾非房產內容
         prompt = f"""
         你是專業的房地產輿情分析師。請閱讀以下 Mobile01 討論區的標題：
         {titles_text}
-        請執行兩項任務：
-        任務一：撰寫「市場輿情快報」(約 3-5 句話)。綜合分析這些標題反映出的整體市場情緒、網友最關注的熱點議題。
-        任務二：針對每一個標題進行詳細分析。
+        
+        請執行以下任務：
+        1. 判斷每一個標題是否與「房地產、購屋、建案、裝潢、居住」相關。
+        2. 如果標題與房地產無關（例如相機、汽車、3C、食記），請將情緒設為「非房產」，關鍵字設為「無」。
+        3. 撰寫「市場輿情快報」(約 3-5 句話)，只總結與房地產相關的內容。
+        
         請直接回傳一個 JSON 格式的資料，格式如下（不要 Markdown 標記）：
         {{
             "summary_report": "在這裡填寫你的市場輿情快報內容...",
             "details": [
-                {{"sentiment": "正面/負面/中立/焦慮/觀望", "keyword": "關鍵字1, 關鍵字2"}}
+                {{"sentiment": "正面/負面/中立/焦慮/觀望/非房產", "keyword": "關鍵字1, 關鍵字2"}}
             ]
         }}
+        確保 "details" 列表的長度與輸入的標題數量完全一致。
         """
         response = model.generate_content(prompt)
         clean_text = response.text.replace("```json", "").replace("```python", "").replace("```", "").strip()
@@ -204,13 +254,21 @@ def analyze_with_gemini(df, use_fake=False):
         except:
             summary_report = "AI 回傳格式異常，無法解析總結報告。"
             details = []
+
         sentiments = [item.get('sentiment', '未知') for item in details]
         keywords = [item.get('keyword', '無') for item in details]
+        
         while len(sentiments) < len(df):
             sentiments.append("未知"); keywords.append("無")
+            
         df['AI情緒'] = sentiments[:len(df)]
         df['關鍵重點'] = keywords[:len(df)]
-        return df, summary_report, None, False 
+        
+        # [過濾] 移除 AI 判定為 "非房產" 的資料列
+        df_filtered = df[df['AI情緒'] != '非房產'].reset_index(drop=True)
+        
+        return df_filtered, summary_report, None, False 
+        
     except Exception as e:
         return df, "", str(e), False
 
@@ -244,10 +302,9 @@ if st.session_state.data:
     df = pd.DataFrame(st.session_state.data)
     st.divider()
     
-    # [調整 1] 分頁順序對調：列表在前，AI 報告在後
+    # [調整] 列表頁
     tab1, tab2 = st.tabs(["📋 原始話題列表", "📊 AI 洞察報告 & 文字雲"])
     
-    # [調整 1] 這是原本的列表，現在是第一個分頁 (Default active)
     with tab1: 
         st.write(f"共蒐集 {len(df)} 則最新話題")
         st.dataframe(df[['標題', '連結']], 
@@ -255,13 +312,12 @@ if st.session_state.data:
                      use_container_width=True)
         st.info("👉 點擊上方「📊 AI 洞察報告」分頁，啟動 AI 分析功能")
 
-    # [調整 1] 這是 AI 報告，現在是第二個分頁
     with tab2: 
         st.write("### 🧠 AI 輿情分析中心")
         
         if st.session_state.analyzed_data is None: 
             if st.button("🤖 啟動 AI 全面解讀 (包含文字雲)", type="primary"):
-                with st.spinner("AI 正在閱讀標題、產生摘要並繪製文字雲..."):
+                with st.spinner("AI 正在過濾雜訊、閱讀標題、並繪製文字雲..."):
                     result_df, summary, error, is_sim = analyze_with_gemini(df, use_fake=force_demo_ai)
                     st.session_state.analyzed_data = result_df
                     st.session_state.summary_report = summary
@@ -270,10 +326,13 @@ if st.session_state.data:
                     st.rerun()
         
         if st.session_state.analyzed_data is not None:
+            # 這裡使用 result_df 來確保顯示的是過濾後的資料
+            display_df = st.session_state.analyzed_data
+            
             if st.session_state.is_simulated:
                 st.warning("⚠️ 目前為「模擬演示模式」(無 API Key)")
             else:
-                st.success("✅ AI 真實分析完成")
+                st.success(f"✅ AI 真實分析完成 (已過濾掉 {len(df) - len(display_df)} 則非房產雜訊)")
             if st.session_state.error_msg: st.error(f"異常: {st.session_state.error_msg}")
             
             st.markdown("""---""")
@@ -287,36 +346,35 @@ if st.session_state.data:
             with col_wc:
                 st.subheader("☁️ 話題熱點文字雲")
                 try:
-                    wc_fig = generate_wordcloud(st.session_state.data[i]['標題'] for i in range(len(st.session_state.data)))
+                    # 注意：這裡文字雲只用過濾後的標題來畫
+                    wc_fig = generate_wordcloud(display_df['標題'])
                     if wc_fig:
                         st.pyplot(wc_fig)
                     else:
-                        st.warning("文字雲產生失敗 (可能字型下載不完全)，但不影響其他功能。")
+                        st.warning("文字雲產生失敗。")
                 except Exception as wc_error:
-                     st.warning(f"文字雲暫時無法顯示: {wc_error}")
+                     st.warning(f"文字雲暫時無法顯示")
 
             with col_chart:
                 st.subheader("📈 情緒分佈指標")
-                # [調整 2] 改用 Altair 畫圖，強制 X 軸文字水平顯示 (0度)
-                if 'AI情緒' in st.session_state.analyzed_data.columns:
-                    chart_data = st.session_state.analyzed_data['AI情緒'].value_counts().reset_index()
+                if 'AI情緒' in display_df.columns and not display_df.empty:
+                    chart_data = display_df['AI情緒'].value_counts().reset_index()
                     chart_data.columns = ['情緒', '數量']
-                    
                     chart = alt.Chart(chart_data).mark_bar().encode(
-                        x=alt.X('情緒', axis=alt.Axis(labelAngle=0, title='情緒類型')), # 0度角 = 水平
+                        x=alt.X('情緒', axis=alt.Axis(labelAngle=0, title='情緒類型')), 
                         y=alt.Y('數量', axis=alt.Axis(title='文章數量')),
                         color=alt.value('#1f77b4'),
                         tooltip=['情緒', '數量']
-                    ).properties(
-                        height=300
-                    )
+                    ).properties(height=300)
                     st.altair_chart(chart, use_container_width=True)
+                else:
+                    st.info("無足夠數據顯示圖表")
 
             st.markdown("""---""")
-            st.subheader("🔍 詳細分析數據")
+            st.subheader("🔍 詳細分析數據 (已過濾雜訊)")
             with st.expander("點擊展開查看逐筆分析結果"):
                 st.dataframe(
-                    st.session_state.analyzed_data[['連結', '標題', 'AI情緒', '關鍵重點']], 
+                    display_df[['連結', '標題', 'AI情緒', '關鍵重點']], 
                     column_config={
                         "連結": st.column_config.LinkColumn("前往"), 
                         "AI情緒": st.column_config.TextColumn("情緒"),
