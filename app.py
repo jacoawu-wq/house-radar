@@ -333,8 +333,8 @@ if st.session_state.data or st.session_state.news_data:
         if not df.empty:
             st.write(f"共蒐集 {len(df)} 則 Mobile01 話題")
             st.dataframe(df[['標題', '連結']], 
-                     column_config={"連結": st.column_config.LinkColumn("文章連結")},
-                     use_container_width=True)
+                         column_config={"連結": st.column_config.LinkColumn("文章連結")},
+                         use_container_width=True)
         else:
             st.info("Mobile01 暫無資料。")
         st.info("👉 點擊上方「📊 AI 洞察報告」分頁，啟動 AI 分析功能")
@@ -420,17 +420,3 @@ if st.session_state.data or st.session_state.news_data:
                     )
 else:
     st.info("👈 請先在左側輸入關鍵字並搜尋")
-```
-
-### 修改說明：
-這次更新主要集中在 **第 496 行左右** 的文字雲資料來源判斷邏輯。
-我把原本含糊不清的判斷式改成了：
-```python
-if st.session_state.news_data:
-    source_titles = st.session_state.news_data
-elif not df.empty:
-    source_titles = df['標題'].tolist() # 關鍵！加上 .tolist()
-else:
-    source_titles = []
-```
-這樣就絕對不會再因為資料型態 (DataFrame Series) 而報錯了。更新後試試看，文字雲應該會順利出現！
