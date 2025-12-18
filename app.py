@@ -11,7 +11,7 @@ import jieba
 from wordcloud import WordCloud 
 import matplotlib.pyplot as plt 
 import os
-import altair as alt # 用來畫漂亮的長條圖
+import altair as alt 
 
 # --- 1. 設定頁面 ---
 st.set_page_config(page_title="房市輿情雷達 AI 版", page_icon="🏠", layout="wide")
@@ -84,7 +84,6 @@ def is_irrelevant_title(title):
             return True
     return False
 
-# --- Topic ID ---
 def get_topic_id(link):
     match = re.search(r't=(\d+)', link)
     if match: return int(match.group(1))
@@ -123,23 +122,26 @@ def download_font():
 # --- 產生文字雲 ---
 def generate_wordcloud(titles_list, user_keywords_str=""):
     text = " ".join(titles_list)
-    
-    # 基礎停用詞
     stopwords = {
         "的", "了", "在", "是", "我", "有", "和", "就", "人", "都", "一個", "上", "也", "很", "到", "說", "要", "去", "你",
         "會", "著", "沒有", "看", "好", "自己", "這", "請問", "請益", "討論", "分享", "問題", "大家", "知道", 
         "Mobile01", "mobile01", "MOBILE01", "Moible01", 
         "什麼", "怎麼", "可以", "真的", "因為", "所以", "如果", "但是", "比較", "覺得", "現在", "還是", "有沒有", "文章",
-        "標題", "連結", "來源", "發布時間", "房產", "台北", "台灣", "討論區", "專區"
+        "標題", "連結", "來源", "發布時間", "房產", "台北", "台灣", "討論區", "專區", "新聞", "報導", "表示", "指出"
     }
     
-    # [修正] 將使用者搜尋的關鍵字也加入停用詞
-    # 這樣可以避免 "北士科" 本身佔據文字雲最大版面，讓其他關聯詞浮現
     if user_keywords_str:
         for k in user_keywords_str.split():
             stopwords.add(k)
             
     try:
+        hot_terms = [
+            "黃仁勳", "輝達", "NVIDIA", "台積電", "北士科", "科學園區", "軟體園區", 
+            "預售屋", "新青安", "高鐵", "捷運", "AI", "半導體", "單價", "總價"
+        ]
+        for term in hot_terms:
+            jieba.add_word(term)
+
         words = jieba.cut(text)
         filtered_words = [word for word in words if word not in stopwords and len(word) > 1]
         text_clean = " ".join(filtered_words)
@@ -159,23 +161,22 @@ def generate_wordcloud(titles_list, user_keywords_str=""):
         print(f"文字雲繪製失敗: {e}") 
         return None
 
-# --- 3. 搜尋函數 ---
+# --- 3.1 搜尋 Mobile01 (原本的邏輯) ---
 def search_mobile01_via_google(keyword_input):
     if not keyword_input: 
         keyword_input = "台北 房產"
         keywords = ["台北", "房產"]
     else:
-        # [核心修正] 支援多關鍵字，以空白分隔
         keywords = keyword_input.split()
 
     real_estate_terms = "預售 OR 建案 OR 房價 OR 坪數 OR 格局 OR 公寓 OR 大樓 OR 豪宅 OR 置產 OR 買房"
     
-    # [核心修正] 組合搜尋語法: (關鍵字1 OR 關鍵字2)
     if len(keywords) > 1:
         keyword_part = f"({' OR '.join(keywords)})"
     else:
         keyword_part = keyword_input
         
+    # 明確指定 site:mobile01.com
     search_query = f"{keyword_part} ({real_estate_terms}) site:mobile01.com when:1y"
     encoded_query = urllib.parse.quote(search_query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
@@ -189,14 +190,10 @@ def search_mobile01_via_google(keyword_input):
             title = item.find('title').text if item.find('title') is not None else "無標題"
             link = item.find('link').text if item.find('link') is not None else "#"
             pub_date = item.find('pubDate').text if item.find('pubDate') is not None else ""
-            
             title = re.sub(r'(?i)\s*[-|]\s*mobile01', '', title).strip()
             
             if is_irrelevant_title(title): continue
-            
-            # [核心修正] 寬鬆過濾: 只要標題包含「任一」關鍵字即可
-            if not any(k in title for k in keywords):
-                continue
+            if not any(k in title for k in keywords): continue
             
             tid = get_topic_id(link)
             articles.append({"標題": title, "連結": link, "來源": "Mobile01", "發布時間": pub_date, "topic_id": tid})
@@ -204,14 +201,42 @@ def search_mobile01_via_google(keyword_input):
         articles.sort(key=lambda x: x['topic_id'], reverse=True)
         return articles[:10]
     except Exception as e:
-        st.error(f"搜尋錯誤: {e}"); return []
+        st.error(f"Mobile01 搜尋錯誤: {e}"); return []
+
+# --- 3.2 [新功能] 搜尋一般新聞 (給文字雲用) ---
+def search_general_news_via_google(keyword_input):
+    if not keyword_input: return []
+    keywords = keyword_input.split()
+    
+    # 這裡不限 site，而是排除 mobile01，抓純新聞
+    if len(keywords) > 1:
+        keyword_part = f"({' OR '.join(keywords)})"
+    else:
+        keyword_part = keyword_input
+        
+    # -site:mobile01.com 排除討論區，專注於新聞媒體
+    search_query = f"{keyword_part} -site:mobile01.com -site:ptt.cc when:1y"
+    encoded_query = urllib.parse.quote(search_query)
+    rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    
+    try:
+        response = requests.get(rss_url, timeout=10)
+        root = ET.fromstring(response.content)
+        articles = []
+        items = root.findall('.//item')
+        
+        for item in items[:20]: # 抓個 20 篇新聞來做文字雲
+            title = item.find('title').text if item.find('title') is not None else ""
+            # 清理新聞標題常見的 " - Yahoo奇摩新聞" 等後綴
+            title = re.sub(r'\s*-\s*.*', '', title).strip()
+            if title:
+                articles.append(title)
+        return articles
+    except:
+        return []
 
 def get_demo_data():
-    return [{"標題": "北士科預售屋開價破百萬合理嗎？心很累", "連結": "https://www.mobile01.com/t=999"},
-            {"標題": "請問 XX 建案的施工品質如何？有漏水案例嗎", "連結": "https://www.mobile01.com/t=888"},
-            {"標題": "分享：終於簽約了！格局真的很棒，但價格硬", "連結": "https://www.mobile01.com/t=777"},
-            {"標題": "現在進場北士科是不是高點？怕被套牢", "連結": "https://www.mobile01.com/t=666"},
-            {"標題": "信義區舊公寓 vs 北士科新成屋 怎麼選？", "連結": "https://www.mobile01.com/t=555"}]
+    return [{"標題": "北士科預售屋開價破百萬合理嗎？心很累", "連結": "https://www.mobile01.com/t=999"}]
 
 # --- 4. AI 分析 ---
 def analyze_with_gemini(df, use_fake=False):
@@ -220,7 +245,7 @@ def analyze_with_gemini(df, use_fake=False):
 
     if is_simulated:
         time.sleep(1)
-        fake_summary = f"【模擬快報】針對本次搜尋結果，整體市場氛圍偏向觀望與焦慮。網友討論焦點集中在「價格過高」與「建商品牌信任度」。部分討論提及「施工品質」與「漏水」疑慮，顯示買方對風險意識提高。"
+        fake_summary = f"【模擬快報】針對本次搜尋結果，整體市場氛圍偏向觀望與焦慮..."
         demo_sentiments = ["焦慮", "負面", "正面", "觀望", "中立"] * 3
         demo_keywords = ["價格過高", "漏水疑慮", "格局方正", "高點套牢", "重劃區發展"] * 3
         df['AI情緒'] = demo_sentiments[:len(df)]
@@ -239,7 +264,7 @@ def analyze_with_gemini(df, use_fake=False):
         
         請執行以下任務：
         1. 判斷每一個標題是否與「房地產、購屋、建案、裝潢、居住」相關。
-        2. 如果標題與房地產無關（例如相機、汽車、3C、食記、非相關地區），請將情緒設為「非房產」，關鍵字設為「無」。
+        2. 如果標題與房地產無關，請將情緒設為「非房產」，關鍵字設為「無」。
         3. 撰寫「市場輿情快報」(約 3-5 句話)，只總結與房地產相關的內容。
         
         請直接回傳一個 JSON 格式的資料，格式如下（不要 Markdown 標記）：
@@ -275,41 +300,51 @@ def analyze_with_gemini(df, use_fake=False):
 st.title("🏠 房市輿情雷達 + AI 洞察") 
 
 if 'data' not in st.session_state: st.session_state.data = []
+if 'news_data' not in st.session_state: st.session_state.news_data = [] # 新增：存新聞標題
 if 'analyzed_data' not in st.session_state: st.session_state.analyzed_data = None
 if 'summary_report' not in st.session_state: st.session_state.summary_report = ""
 
 st.write("### 🔍 輿情關鍵字搜尋")
 col_input, col_btn = st.columns([3, 1])
 with col_input:
-    # [優化] 更新提示文字
     keyword = st.text_input("輸入關鍵字 (可多組，例如：北士科 士林)", "北士科")
 with col_btn:
     st.write(""); st.write("")
     if st.button("🚀 搜尋最新話題", type="primary"):
-        with st.spinner(f'正在蒐集關於「{keyword}」的最新討論 (限額 10 筆)...'):
+        # [核心升級] 雙軌並行：同時抓 Mobile01 和 一般新聞
+        with st.spinner(f'正在進行雙軌搜尋：Mobile01 討論 + 相關新聞...'):
+            # 1. 抓 Mobile01 (給列表和 AI 情緒分析用)
             st.session_state.data = search_mobile01_via_google(keyword)
+            # 2. 抓新聞 (給文字雲用)
+            st.session_state.news_data = search_general_news_via_google(keyword)
+            
             st.session_state.analyzed_data = None
             st.session_state.summary_report = ""
+            
             if not st.session_state.data: 
-                st.warning(f"在標題中找不到「{keyword}」的相關討論。\n建議：嘗試其他關鍵字，或確認該區域近期是否有熱度。")
+                st.warning(f"Mobile01 找不到相關討論，但我們嘗試抓取新聞。")
 
 if st.button("📂 載入範例資料 (Demo)", help="搜尋不到時使用"):
     st.session_state.data = get_demo_data()
+    st.session_state.news_data = ["北士科房價創新高", "黃仁勳來台帶動AI園區發展", "輝達設廠地點曝光"] # 假新聞標題
     st.session_state.analyzed_data = None 
     st.success("已載入模擬數據！")
 
 # --- 6. 顯示內容區 ---
-if st.session_state.data:
-    df = pd.DataFrame(st.session_state.data)
+if st.session_state.data or st.session_state.news_data:
+    df = pd.DataFrame(st.session_state.data) if st.session_state.data else pd.DataFrame()
     st.divider()
     
     tab1, tab2 = st.tabs(["📋 原始話題列表", "📊 AI 洞察報告 & 文字雲"])
     
     with tab1: 
-        st.write(f"共蒐集 {len(df)} 則最新話題")
-        st.dataframe(df[['標題', '連結']], 
-                     column_config={"連結": st.column_config.LinkColumn("文章連結")},
-                     use_container_width=True)
+        if not df.empty:
+            st.write(f"共蒐集 {len(df)} 則 Mobile01 話題")
+            st.dataframe(df[['標題', '連結']], 
+                         column_config={"連結": st.column_config.LinkColumn("文章連結")},
+                         use_container_width=True)
+        else:
+            st.info("Mobile01 暫無資料。")
         st.info("👉 點擊上方「📊 AI 洞察報告」分頁，啟動 AI 分析功能")
 
     with tab2: 
@@ -317,67 +352,76 @@ if st.session_state.data:
         
         if st.session_state.analyzed_data is None: 
             if st.button("🤖 啟動 AI 全面解讀 (包含文字雲)", type="primary"):
-                with st.spinner("AI 正在閱讀標題、產生摘要並繪製文字雲..."):
-                    result_df, summary, error, is_sim = analyze_with_gemini(df, use_fake=force_demo_ai)
-                    st.session_state.analyzed_data = result_df
-                    st.session_state.summary_report = summary
-                    st.session_state.is_simulated = is_sim
-                    st.session_state.error_msg = error
+                with st.spinner("AI 正在閱讀討論串、並根據「相關新聞」繪製文字雲..."):
+                    if not df.empty:
+                        result_df, summary, error, is_sim = analyze_with_gemini(df, use_fake=force_demo_ai)
+                        st.session_state.analyzed_data = result_df
+                        st.session_state.summary_report = summary
+                        st.session_state.is_simulated = is_sim
+                        st.session_state.error_msg = error
+                    else:
+                        # 萬一只有新聞沒有 Mobile01 資料，手動造一個空的結果讓程式跑下去畫文字雲
+                        st.session_state.analyzed_data = pd.DataFrame()
+                        st.session_state.summary_report = "無 Mobile01 討論數據，僅提供新聞文字雲參考。"
+                        st.session_state.is_simulated = False
+                        st.session_state.error_msg = None
                     st.rerun()
         
-        if st.session_state.analyzed_data is not None:
-            display_df = st.session_state.analyzed_data
-            if st.session_state.is_simulated:
-                st.warning("⚠️ 目前為「模擬演示模式」(無 API Key)")
-            else:
-                st.success(f"✅ AI 真實分析完成 (樣本數：{len(display_df)} 則)")
-            if st.session_state.error_msg: st.error(f"異常: {st.session_state.error_msg}")
+        # 顯示結果
+        if st.session_state.summary_report: # 只要有跑過分析就顯示
             
             st.markdown("""---""")
-            st.subheader("📝 AI 市場輿情快報")
-            if st.session_state.summary_report:
-                st.info(st.session_state.summary_report, icon="💡")
+            st.subheader("📝 AI 市場輿情快報 (基於 Mobile01)")
+            st.info(st.session_state.summary_report, icon="💡")
             
             st.markdown("""---""")
             col_wc, col_chart = st.columns([3, 2])
             
             with col_wc:
-                st.subheader("☁️ 話題熱點文字雲")
+                st.subheader("☁️ 趨勢熱點文字雲 (基於新聞)")
                 try:
-                    # [修正] 傳入搜尋關鍵字，以便從文字雲中移除
-                    wc_fig = generate_wordcloud(display_df['標題'], keyword)
-                    if wc_fig:
-                        st.pyplot(wc_fig)
+                    # [核心修正] 文字雲現在使用 news_data 來繪製！
+                    source_titles = st.session_state.news_data if st.session_state.news_data else df['標題']
+                    if source_titles and len(source_titles) > 0:
+                        wc_fig = generate_wordcloud(source_titles, keyword)
+                        if wc_fig:
+                            st.pyplot(wc_fig)
+                            st.caption(f"資料來源：Google News ({len(source_titles)} 則)")
+                        else:
+                            st.warning("文字雲產生失敗。")
                     else:
-                        st.warning("文字雲產生失敗。")
+                        st.warning("無足夠新聞資料可繪製文字雲。")
                 except Exception as wc_error:
                      st.warning(f"文字雲暫時無法顯示")
 
             with col_chart:
-                st.subheader("📈 情緒分佈指標")
-                if 'AI情緒' in display_df.columns and not display_df.empty:
-                    chart_data = display_df['AI情緒'].value_counts().reset_index()
-                    chart_data.columns = ['情緒', '數量']
-                    chart = alt.Chart(chart_data).mark_bar().encode(
-                        x=alt.X('情緒', axis=alt.Axis(labelAngle=0, title='情緒類型')), 
-                        y=alt.Y('數量', axis=alt.Axis(title='文章數量')),
-                        color=alt.value('#1f77b4'),
-                        tooltip=['情緒', '數量']
-                    ).properties(height=300)
-                    st.altair_chart(chart, use_container_width=True)
+                st.subheader("📈 情緒分佈 (基於 Mobile01)")
+                if st.session_state.analyzed_data is not None and not st.session_state.analyzed_data.empty:
+                    display_df = st.session_state.analyzed_data
+                    if 'AI情緒' in display_df.columns:
+                        chart_data = display_df['AI情緒'].value_counts().reset_index()
+                        chart_data.columns = ['情緒', '數量']
+                        chart = alt.Chart(chart_data).mark_bar().encode(
+                            x=alt.X('情緒', axis=alt.Axis(labelAngle=0, title='情緒類型')), 
+                            y=alt.Y('數量', axis=alt.Axis(title='文章數量')),
+                            color=alt.value('#1f77b4'),
+                            tooltip=['情緒', '數量']
+                        ).properties(height=300)
+                        st.altair_chart(chart, use_container_width=True)
                 else:
-                    st.info("無足夠數據顯示圖表")
+                    st.info("無討論數據顯示圖表")
 
-            st.markdown("""---""")
-            st.subheader("🔍 詳細分析數據 (已過濾雜訊)")
-            with st.expander("點擊展開查看逐筆分析結果"):
-                st.dataframe(
-                    display_df[['連結', '標題', 'AI情緒', '關鍵重點']], 
-                    column_config={
-                        "連結": st.column_config.LinkColumn("前往"), 
-                        "AI情緒": st.column_config.TextColumn("情緒"),
-                    },
-                    use_container_width=True
-                )
+            if st.session_state.analyzed_data is not None and not st.session_state.analyzed_data.empty:
+                st.markdown("""---""")
+                st.subheader("🔍 詳細分析數據")
+                with st.expander("點擊展開查看逐筆分析結果"):
+                    st.dataframe(
+                        st.session_state.analyzed_data[['連結', '標題', 'AI情緒', '關鍵重點']], 
+                        column_config={
+                            "連結": st.column_config.LinkColumn("前往"), 
+                            "AI情緒": st.column_config.TextColumn("情緒"),
+                        },
+                        use_container_width=True
+                    )
 else:
     st.info("👈 請先在左側輸入關鍵字並搜尋")
