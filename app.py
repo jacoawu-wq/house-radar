@@ -65,7 +65,6 @@ BLOCKED_FORUM_IDS = [
     "f=566", "f=770", "f=132"  # 穿戴
 ]
 
-# [修正] 擴充負面關鍵字，加入 "菜單"、"交車" 等車版常用詞
 NEGATIVE_KEYWORDS = [
     "相機", "鏡頭", "開箱", "手機", "耳機", "音響", "喇叭", "儲存裝置", "硬碟", 
     "顯卡", "筆電", "螢幕", "滑鼠", "鍵盤", "牛肉麵", "食記", "遊記", "攝影", "拍攝",
@@ -124,11 +123,14 @@ def download_font():
 # --- 產生文字雲 ---
 def generate_wordcloud(titles_list):
     text = " ".join(titles_list)
+    # [修正] 擴充停用詞，加入各種大小寫的 Mobile01，確保它不會出現
     stopwords = {
         "的", "了", "在", "是", "我", "有", "和", "就", "人", "都", "一個", "上", "也", "很", "到", "說", "要", "去", "你",
-        "會", "著", "沒有", "看", "好", "自己", "這", "請問", "請益", "討論", "分享", "問題", "大家", "知道", "Mobile01",
+        "會", "著", "沒有", "看", "好", "自己", "這", "請問", "請益", "討論", "分享", "問題", "大家", "知道", 
+        "Mobile01", "mobile01", "MOBILE01", "Moible01", # 各種拼法都擋掉
         "什麼", "怎麼", "可以", "真的", "因為", "所以", "如果", "但是", "比較", "覺得", "現在", "還是", "有沒有", "文章",
-        "標題", "連結", "來源", "發布時間", "北士科", "房產"
+        "標題", "連結", "來源", "發布時間", "北士科", "房產", 
+        "台北", "台灣", "討論區", "專區"
     }
     try:
         words = jieba.cut(text)
@@ -163,17 +165,16 @@ def search_mobile01_via_google(keyword):
         articles = []
         items = root.findall('.//item')
         
-        for item in items[:60]: # 抓多一點來過濾
+        for item in items[:60]: 
             title = item.find('title').text if item.find('title') is not None else "無標題"
             link = item.find('link').text if item.find('link') is not None else "#"
             pub_date = item.find('pubDate').text if item.find('pubDate') is not None else ""
-            title = title.replace("- Mobile01", "").strip()
             
-            # [核心修正 1] 過濾機制: 負面關鍵字 (車、相機、菜單)
+            # [修正] 使用 Regex 強力清除 " - Mobile01" 及其各種變形
+            title = re.sub(r'(?i)\s*[-|]\s*mobile01', '', title).strip()
+            
             if is_irrelevant_title(title): continue
             
-            # [核心修正 2] 嚴格鎖定: 標題必須包含使用者輸入的關鍵字
-            # 如果搜 "北士科"，標題裡一定要有 "北士科"，否則 "新竹台肥" 這種就會被擋掉
             if keyword not in title:
                 continue
             
@@ -181,7 +182,7 @@ def search_mobile01_via_google(keyword):
             articles.append({"標題": title, "連結": link, "來源": "Mobile01", "發布時間": pub_date, "topic_id": tid})
             
         articles.sort(key=lambda x: x['topic_id'], reverse=True)
-        return articles[:10] # 回傳 10 筆
+        return articles[:10]
     except Exception as e:
         st.error(f"搜尋錯誤: {e}"); return []
 
@@ -269,7 +270,6 @@ with col_btn:
             st.session_state.analyzed_data = None
             st.session_state.summary_report = ""
             if not st.session_state.data: 
-                # [優化] 當找不到資料時，給更明確的建議
                 st.warning(f"在標題中找不到「{keyword}」的相關討論。\n建議：嘗試其他關鍵字，或確認該區域近期是否有熱度。")
 
 if st.button("📂 載入範例資料 (Demo)", help="搜尋不到時使用"):
@@ -282,7 +282,6 @@ if st.session_state.data:
     df = pd.DataFrame(st.session_state.data)
     st.divider()
     
-    # [調整] 分頁順序：列表在前，AI 在後
     tab1, tab2 = st.tabs(["📋 原始話題列表", "📊 AI 洞察報告 & 文字雲"])
     
     with tab1: 
@@ -337,7 +336,6 @@ if st.session_state.data:
                 if 'AI情緒' in display_df.columns and not display_df.empty:
                     chart_data = display_df['AI情緒'].value_counts().reset_index()
                     chart_data.columns = ['情緒', '數量']
-                    # [調整] Altair 圖表，文字水平顯示
                     chart = alt.Chart(chart_data).mark_bar().encode(
                         x=alt.X('情緒', axis=alt.Axis(labelAngle=0, title='情緒類型')), 
                         y=alt.Y('數量', axis=alt.Axis(title='文章數量')),
