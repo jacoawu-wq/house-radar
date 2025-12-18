@@ -128,7 +128,8 @@ def generate_wordcloud(titles_list, user_keywords_str=""):
         "會", "著", "沒有", "看", "好", "自己", "這", "請問", "請益", "討論", "分享", "問題", "大家", "知道", 
         "Mobile01", "mobile01", "MOBILE01", "Moible01", 
         "什麼", "怎麼", "可以", "真的", "因為", "所以", "如果", "但是", "比較", "覺得", "現在", "還是", "有沒有", "文章",
-        "標題", "連結", "來源", "發布時間", "房產", "台北", "台灣", "討論區", "專區", "新聞", "報導", "表示", "指出"
+        "標題", "連結", "來源", "發布時間", "房產", "台北", "台灣", "討論區", "專區", "新聞", "報導", "表示", "指出",
+        "今日", "最新", "消息", "相關"
     }
     
     if user_keywords_str:
@@ -138,7 +139,7 @@ def generate_wordcloud(titles_list, user_keywords_str=""):
     try:
         hot_terms = [
             "黃仁勳", "輝達", "NVIDIA", "台積電", "北士科", "科學園區", "軟體園區", 
-            "預售屋", "新青安", "高鐵", "捷運", "AI", "半導體", "單價", "總價"
+            "預售屋", "新青安", "高鐵", "捷運", "AI", "半導體", "單價", "總價", "房價"
         ]
         for term in hot_terms:
             jieba.add_word(term)
@@ -148,13 +149,28 @@ def generate_wordcloud(titles_list, user_keywords_str=""):
         text_clean = " ".join(filtered_words)
         if not text_clean.strip(): return None 
         font_path = download_font()
+        
+        # [修改] 增加文字雲豐富度設定
+        wc_params = {
+            "font_path": font_path,
+            "background_color": "white",
+            "width": 1000,          # 加寬畫布
+            "height": 500,          # 加高畫布
+            "max_words": 200,       # [關鍵] 顯示更多詞彙 (原本80)
+            "colormap": "viridis",
+            "font_step": 1,         # 字體大小間隔更細
+            "min_font_size": 6,     # [關鍵] 允許更小的字出現
+            "prefer_horizontal": 0.9
+        }
+        
         if font_path:
-            wc = WordCloud(
-                font_path=font_path, background_color="white", width=800, height=400, max_words=80, colormap="viridis", font_step=2, min_font_size=10
-            ).generate(text_clean)
+            wc = WordCloud(**wc_params).generate(text_clean)
         else:
-            wc = WordCloud(background_color="white", width=800, height=400, max_words=80).generate(text_clean)
-        fig, ax = plt.subplots(figsize=(10, 5))
+            # 沒字型備案
+            wc_params.pop("font_path")
+            wc = WordCloud(**wc_params).generate(text_clean)
+            
+        fig, ax = plt.subplots(figsize=(12, 6))
         ax.imshow(wc, interpolation="bilinear")
         ax.axis("off")
         return fig
@@ -203,7 +219,7 @@ def search_mobile01_via_google(keyword_input):
     except Exception as e:
         st.error(f"Mobile01 搜尋錯誤: {e}"); return []
 
-# --- 3.2 搜尋一般新聞 ---
+# --- 3.2 搜尋一般新聞 (增量版) ---
 def search_general_news_via_google(keyword_input):
     if not keyword_input: return []
     keywords = keyword_input.split()
@@ -223,7 +239,8 @@ def search_general_news_via_google(keyword_input):
         articles = []
         items = root.findall('.//item')
         
-        for item in items[:20]:
+        # [修改] 盡量抓多一點新聞，從 20 提升到 100 (或 RSS 極限)
+        for item in items: 
             title = item.find('title').text if item.find('title') is not None else ""
             title = re.sub(r'\s*-\s*.*', '', title).strip()
             if title and not is_irrelevant_title(title):
@@ -367,25 +384,25 @@ if st.session_state.data or st.session_state.news_data:
             col_wc, col_chart = st.columns([3, 2])
             
             with col_wc:
-                st.subheader("☁️ 趨勢熱點文字雲 (基於新聞)")
+                st.subheader("☁️ 趨勢熱點文字雲 (基於新聞 + 討論)")
                 try:
-                    # [修正] 確保 source_titles 一定是 list，避免 Series Truth Value Error
-                    if st.session_state.news_data:
-                        source_titles = st.session_state.news_data
-                    elif not df.empty:
-                        source_titles = df['標題'].tolist() # 強制轉 list
-                    else:
-                        source_titles = []
-
+                    # [修改] 混合資料源策略：
+                    # 優先使用新聞，如果太少，就把 Mobile01 的標題也加進來，灌爆資料量
+                    news_list = st.session_state.news_data if st.session_state.news_data else []
+                    mobile01_list = df['標題'].tolist() if not df.empty else []
+                    
+                    # 這裡將兩者合併，確保字數絕對夠多
+                    source_titles = news_list + mobile01_list
+                    
                     if source_titles and len(source_titles) > 0:
                         wc_fig = generate_wordcloud(source_titles, keyword)
                         if wc_fig:
                             st.pyplot(wc_fig)
-                            st.caption(f"資料來源：Google News ({len(source_titles)} 則)")
+                            st.caption(f"資料來源：Google News & Mobile01 (共 {len(source_titles)} 則標題)")
                         else:
                             st.warning("文字雲產生失敗。")
                     else:
-                        st.warning("無足夠新聞資料可繪製文字雲。")
+                        st.warning("無足夠資料可繪製文字雲。")
                 except Exception as wc_error:
                      st.warning(f"文字雲暫時無法顯示: {wc_error}")
 
