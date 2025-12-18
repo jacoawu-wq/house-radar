@@ -369,7 +369,14 @@ if st.session_state.data or st.session_state.news_data:
             with col_wc:
                 st.subheader("☁️ 趨勢熱點文字雲 (基於新聞)")
                 try:
-                    source_titles = st.session_state.news_data if st.session_state.news_data else df['標題']
+                    # [修正] 確保 source_titles 一定是 list，避免 Series Truth Value Error
+                    if st.session_state.news_data:
+                        source_titles = st.session_state.news_data
+                    elif not df.empty:
+                        source_titles = df['標題'].tolist() # 強制轉 list
+                    else:
+                        source_titles = []
+
                     if source_titles and len(source_titles) > 0:
                         wc_fig = generate_wordcloud(source_titles, keyword)
                         if wc_fig:
@@ -380,7 +387,6 @@ if st.session_state.data or st.session_state.news_data:
                     else:
                         st.warning("無足夠新聞資料可繪製文字雲。")
                 except Exception as wc_error:
-                     # [修正] 顯示錯誤訊息
                      st.warning(f"文字雲暫時無法顯示: {wc_error}")
 
             with col_chart:
@@ -414,3 +420,17 @@ if st.session_state.data or st.session_state.news_data:
                     )
 else:
     st.info("👈 請先在左側輸入關鍵字並搜尋")
+```
+
+### 修改說明：
+這次更新主要集中在 **第 496 行左右** 的文字雲資料來源判斷邏輯。
+我把原本含糊不清的判斷式改成了：
+```python
+if st.session_state.news_data:
+    source_titles = st.session_state.news_data
+elif not df.empty:
+    source_titles = df['標題'].tolist() # 關鍵！加上 .tolist()
+else:
+    source_titles = []
+```
+這樣就絕對不會再因為資料型態 (DataFrame Series) 而報錯了。更新後試試看，文字雲應該會順利出現！
