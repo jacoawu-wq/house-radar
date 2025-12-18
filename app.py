@@ -121,17 +121,24 @@ def download_font():
     return None
 
 # --- 產生文字雲 ---
-def generate_wordcloud(titles_list):
+def generate_wordcloud(titles_list, user_keywords_str=""):
     text = " ".join(titles_list)
-    # [修正] 擴充停用詞，加入各種大小寫的 Mobile01，確保它不會出現
+    
+    # 基礎停用詞
     stopwords = {
         "的", "了", "在", "是", "我", "有", "和", "就", "人", "都", "一個", "上", "也", "很", "到", "說", "要", "去", "你",
         "會", "著", "沒有", "看", "好", "自己", "這", "請問", "請益", "討論", "分享", "問題", "大家", "知道", 
-        "Mobile01", "mobile01", "MOBILE01", "Moible01", # 各種拼法都擋掉
+        "Mobile01", "mobile01", "MOBILE01", "Moible01", 
         "什麼", "怎麼", "可以", "真的", "因為", "所以", "如果", "但是", "比較", "覺得", "現在", "還是", "有沒有", "文章",
-        "標題", "連結", "來源", "發布時間", "北士科", "房產", 
-        "台北", "台灣", "討論區", "專區"
+        "標題", "連結", "來源", "發布時間", "房產", "台北", "台灣", "討論區", "專區"
     }
+    
+    # [修正] 將使用者搜尋的關鍵字也加入停用詞
+    # 這樣可以避免 "北士科" 本身佔據文字雲最大版面，讓其他關聯詞浮現
+    if user_keywords_str:
+        for k in user_keywords_str.split():
+            stopwords.add(k)
+            
     try:
         words = jieba.cut(text)
         filtered_words = [word for word in words if word not in stopwords and len(word) > 1]
@@ -153,10 +160,23 @@ def generate_wordcloud(titles_list):
         return None
 
 # --- 3. 搜尋函數 ---
-def search_mobile01_via_google(keyword):
-    if not keyword: keyword = "台北 房產"
+def search_mobile01_via_google(keyword_input):
+    if not keyword_input: 
+        keyword_input = "台北 房產"
+        keywords = ["台北", "房產"]
+    else:
+        # [核心修正] 支援多關鍵字，以空白分隔
+        keywords = keyword_input.split()
+
     real_estate_terms = "預售 OR 建案 OR 房價 OR 坪數 OR 格局 OR 公寓 OR 大樓 OR 豪宅 OR 置產 OR 買房"
-    search_query = f"{keyword} ({real_estate_terms}) site:mobile01.com when:1y"
+    
+    # [核心修正] 組合搜尋語法: (關鍵字1 OR 關鍵字2)
+    if len(keywords) > 1:
+        keyword_part = f"({' OR '.join(keywords)})"
+    else:
+        keyword_part = keyword_input
+        
+    search_query = f"{keyword_part} ({real_estate_terms}) site:mobile01.com when:1y"
     encoded_query = urllib.parse.quote(search_query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     try:
@@ -170,12 +190,12 @@ def search_mobile01_via_google(keyword):
             link = item.find('link').text if item.find('link') is not None else "#"
             pub_date = item.find('pubDate').text if item.find('pubDate') is not None else ""
             
-            # [修正] 使用 Regex 強力清除 " - Mobile01" 及其各種變形
             title = re.sub(r'(?i)\s*[-|]\s*mobile01', '', title).strip()
             
             if is_irrelevant_title(title): continue
             
-            if keyword not in title:
+            # [核心修正] 寬鬆過濾: 只要標題包含「任一」關鍵字即可
+            if not any(k in title for k in keywords):
                 continue
             
             tid = get_topic_id(link)
@@ -261,7 +281,8 @@ if 'summary_report' not in st.session_state: st.session_state.summary_report = "
 st.write("### 🔍 輿情關鍵字搜尋")
 col_input, col_btn = st.columns([3, 1])
 with col_input:
-    keyword = st.text_input("輸入關鍵字 (例如：北士科、預售屋、某某建案)", "北士科")
+    # [優化] 更新提示文字
+    keyword = st.text_input("輸入關鍵字 (可多組，例如：北士科 士林)", "北士科")
 with col_btn:
     st.write(""); st.write("")
     if st.button("🚀 搜尋最新話題", type="primary"):
@@ -323,7 +344,8 @@ if st.session_state.data:
             with col_wc:
                 st.subheader("☁️ 話題熱點文字雲")
                 try:
-                    wc_fig = generate_wordcloud(display_df['標題'])
+                    # [修正] 傳入搜尋關鍵字，以便從文字雲中移除
+                    wc_fig = generate_wordcloud(display_df['標題'], keyword)
                     if wc_fig:
                         st.pyplot(wc_fig)
                     else:
