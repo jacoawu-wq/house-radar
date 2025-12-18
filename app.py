@@ -65,16 +65,13 @@ BLOCKED_FORUM_IDS = [
     "f=566", "f=770", "f=132"  # 穿戴
 ]
 
-# [核心修正] 負面關鍵字大擴充：加入政治人物與政治用語
+# [修正] 擴充負面關鍵字，包含政治與非房產雜訊
 NEGATIVE_KEYWORDS = [
-    # 3C/汽車/其他
     "相機", "鏡頭", "開箱", "手機", "耳機", "音響", "喇叭", "儲存裝置", "硬碟", 
     "顯卡", "筆電", "螢幕", "滑鼠", "鍵盤", "牛肉麵", "食記", "遊記", "攝影", "拍攝",
     "Nikon", "Sony", "Canon", "Samsung", "iPhone", "Android",
     "菜單", "交車", "保養", "試駕", "維修", "徵求", "車友",
-    # 政治人物與口水戰 (針對北士科等熱門議題優化)
-    "柯文哲", "柯P", "蔣萬安", "黃珊珊", "王世堅", "議員", "立委", "市長", 
-    "選舉", "弊案", "圖利", "政治", "黨團", "造勢", "賄選", "彈劾"
+    "柯文哲", "蔣萬安", "弊案", "圖利", "選舉", "黨部", "政治"
 ]
 
 def is_blocked_link(link):
@@ -166,7 +163,7 @@ def generate_wordcloud(titles_list, user_keywords_str=""):
         print(f"文字雲繪製失敗: {e}") 
         return None
 
-# --- 3.1 搜尋 Mobile01 (原本的邏輯) ---
+# --- 3.1 搜尋 Mobile01 ---
 def search_mobile01_via_google(keyword_input):
     if not keyword_input: 
         keyword_input = "台北 房產"
@@ -174,8 +171,7 @@ def search_mobile01_via_google(keyword_input):
     else:
         keywords = keyword_input.split()
 
-    # [核心修正] 強化建案相關詞彙，確保 "賞屋"、"代銷" 等內容被納入
-    real_estate_terms = "預售 OR 建案 OR 房價 OR 坪數 OR 格局 OR 公寓 OR 大樓 OR 豪宅 OR 置產 OR 買房 OR 代銷 OR 賞屋 OR 接待中心 OR 交屋 OR 驗屋"
+    real_estate_terms = "預售 OR 建案 OR 房價 OR 坪數 OR 格局 OR 公寓 OR 大樓 OR 豪宅 OR 置產 OR 買房"
     
     if len(keywords) > 1:
         keyword_part = f"({' OR '.join(keywords)})"
@@ -197,10 +193,7 @@ def search_mobile01_via_google(keyword_input):
             pub_date = item.find('pubDate').text if item.find('pubDate') is not None else ""
             title = re.sub(r'(?i)\s*[-|]\s*mobile01', '', title).strip()
             
-            # 過濾政治與無關內容
             if is_irrelevant_title(title): continue
-            
-            # 嚴格關鍵字匹配
             if not any(k in title for k in keywords): continue
             
             tid = get_topic_id(link)
@@ -211,7 +204,7 @@ def search_mobile01_via_google(keyword_input):
     except Exception as e:
         st.error(f"Mobile01 搜尋錯誤: {e}"); return []
 
-# --- 3.2 搜尋一般新聞 (給文字雲用) ---
+# --- 3.2 搜尋一般新聞 ---
 def search_general_news_via_google(keyword_input):
     if not keyword_input: return []
     keywords = keyword_input.split()
@@ -221,10 +214,7 @@ def search_general_news_via_google(keyword_input):
     else:
         keyword_part = keyword_input
         
-    # [核心修正] 新聞部分也一併排除政治人物，避免文字雲被政治詞彙淹沒
-    negative_query = "-柯文哲 -蔣萬安 -弊案 -選舉"
-    search_query = f"{keyword_part} {negative_query} -site:mobile01.com -site:ptt.cc when:1y"
-    
+    search_query = f"{keyword_part} -site:mobile01.com -site:ptt.cc when:1y"
     encoded_query = urllib.parse.quote(search_query)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     
@@ -237,9 +227,8 @@ def search_general_news_via_google(keyword_input):
         for item in items[:20]:
             title = item.find('title').text if item.find('title') is not None else ""
             title = re.sub(r'\s*-\s*.*', '', title).strip()
-            # 這裡也做一次標題過濾，確保文字雲乾淨
-            if is_irrelevant_title(title): continue
-            if title:
+            # 這裡也要過濾掉政治雜訊
+            if title and not is_irrelevant_title(title):
                 articles.append(title)
         return articles
     except:
@@ -310,7 +299,7 @@ def analyze_with_gemini(df, use_fake=False):
 st.title("🏠 房市輿情雷達 + AI 洞察") 
 
 if 'data' not in st.session_state: st.session_state.data = []
-if 'news_data' not in st.session_state: st.session_state.news_data = [] # 新增：存新聞標題
+if 'news_data' not in st.session_state: st.session_state.news_data = [] 
 if 'analyzed_data' not in st.session_state: st.session_state.analyzed_data = None
 if 'summary_report' not in st.session_state: st.session_state.summary_report = ""
 
@@ -326,13 +315,12 @@ with col_btn:
             st.session_state.news_data = search_general_news_via_google(keyword)
             st.session_state.analyzed_data = None
             st.session_state.summary_report = ""
-            
             if not st.session_state.data: 
                 st.warning(f"Mobile01 找不到相關討論，但我們嘗試抓取新聞。")
 
 if st.button("📂 載入範例資料 (Demo)", help="搜尋不到時使用"):
     st.session_state.data = get_demo_data()
-    st.session_state.news_data = ["北士科房價創新高", "黃仁勳來台帶動AI園區發展", "輝達設廠地點曝光"] # 假新聞標題
+    st.session_state.news_data = ["北士科房價創新高", "黃仁勳來台帶動AI園區發展", "輝達設廠地點曝光"] 
     st.session_state.analyzed_data = None 
     st.success("已載入模擬數據！")
 
@@ -427,12 +415,3 @@ if st.session_state.data or st.session_state.news_data:
                     )
 else:
     st.info("👈 請先在左側輸入關鍵字並搜尋")
-```
-
-### 這次的「政治免疫」修正：
-
-1.  **負面關鍵字大擴充 (`NEGATIVE_KEYWORDS`)**：加入了「柯文哲、蔣萬安、弊案、圖利、選舉」等字眼。現在你在 Mobile01 搜尋列表和右邊的新聞文字雲中，都**不會**再看到這些政治口水。
-2.  **建案關鍵字強化 (`real_estate_terms`)**：在搜尋 Mobile01 時，我加入了「代銷、賞屋、接待中心、交屋」等詞彙，強制 Google 優先抓取這些**真正買房者**會討論的內容。
-3.  **新聞搜尋也過濾 (`search_general_news_via_google`)**：我在新聞搜尋的語法中也加入了 `-柯文哲 -弊案`，確保你的文字雲是關於「房市趨勢」，而不是「政治新聞」。
-
-現在去搜尋「北士科」，你看到的應該會是「價格、輝達、園區」，而不再是滿滿的「柯P、弊案」了！
