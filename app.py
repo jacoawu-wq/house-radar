@@ -65,7 +65,6 @@ BLOCKED_FORUM_IDS = [
     "f=566", "f=770", "f=132"  # 穿戴
 ]
 
-# [修正] 擴充負面關鍵字，包含政治與非房產雜訊
 NEGATIVE_KEYWORDS = [
     "相機", "鏡頭", "開箱", "手機", "耳機", "音響", "喇叭", "儲存裝置", "硬碟", 
     "顯卡", "筆電", "螢幕", "滑鼠", "鍵盤", "牛肉麵", "食記", "遊記", "攝影", "拍攝",
@@ -227,7 +226,6 @@ def search_general_news_via_google(keyword_input):
         for item in items[:20]:
             title = item.find('title').text if item.find('title') is not None else ""
             title = re.sub(r'\s*-\s*.*', '', title).strip()
-            # 這裡也要過濾掉政治雜訊
             if title and not is_irrelevant_title(title):
                 articles.append(title)
         return articles
@@ -335,8 +333,8 @@ if st.session_state.data or st.session_state.news_data:
         if not df.empty:
             st.write(f"共蒐集 {len(df)} 則 Mobile01 話題")
             st.dataframe(df[['標題', '連結']], 
-                         column_config={"連結": st.column_config.LinkColumn("文章連結")},
-                         use_container_width=True)
+                     column_config={"連結": st.column_config.LinkColumn("文章連結")},
+                     use_container_width=True)
         else:
             st.info("Mobile01 暫無資料。")
         st.info("👉 點擊上方「📊 AI 洞察報告」分頁，啟動 AI 分析功能")
@@ -382,7 +380,8 @@ if st.session_state.data or st.session_state.news_data:
                     else:
                         st.warning("無足夠新聞資料可繪製文字雲。")
                 except Exception as wc_error:
-                     st.warning(f"文字雲暫時無法顯示")
+                     # [修正] 顯示錯誤訊息
+                     st.warning(f"文字雲暫時無法顯示: {wc_error}")
 
             with col_chart:
                 st.subheader("📈 情緒分佈 (基於 Mobile01)")
